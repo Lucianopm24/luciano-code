@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTerminalRenderer } from '../src/ui/terminal-renderer.js';
+import { createTerminalRenderer, getTerminalStream } from '../src/ui/terminal-renderer.js';
 import { stripAnsi } from '../src/ui/colors.js';
 
 function createOutput() {
@@ -16,6 +16,15 @@ function createOutput() {
     },
   };
 }
+
+test('readline receives the underlying stream rather than the renderer wrapper', () => {
+  const output = createOutput();
+  const renderer = createTerminalRenderer(output);
+
+  assert.notEqual(renderer, output);
+  assert.equal(typeof renderer.on, 'undefined');
+  assert.equal(getTerminalStream(renderer), output);
+});
 
 test('duplicate tool events are rendered once per stable event scope', () => {
   const output = createOutput();

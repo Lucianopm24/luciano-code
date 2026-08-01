@@ -1,6 +1,7 @@
 import readline from 'node:readline';
 import { colors } from './ui/colors.js';
 import { saveConfig, setNvidiaDataConsent } from './config.js';
+import { getTerminalStream } from './ui/terminal-renderer.js';
 
 const ACCEPTED = new Set(['y', 'yes', 's', 'si', 'sí']);
 
@@ -23,6 +24,7 @@ export async function runConsentGate({
   output = process.stdout,
   config,
   force = false,
+  readlineInterface: existingInterface,
 } = {}) {
   if (!force && ['accepted', 'declined'].includes(config?.nvidiaDataConsent)) {
     return { config, decided: true, changed: false };
@@ -33,11 +35,21 @@ export async function runConsentGate({
     return { config, decided: false, changed: false };
   }
 
+  const promptOutput = getTerminalStream(output);
   output.write(`\n${colors.bold('NVIDIA data-sharing consent')}\n`);
   output.write(`${colors.slate('To answer your request, Luciano Code may send your prompts, selected file contents, tool results, and generated responses to NVIDIA NIM. NVIDIA may process or use submitted data to train models according to its current policies.')}\n`);
   output.write(`${colors.amber('This is separate from local folder trust. Declining blocks remote AI requests; your local commands and local conversation files remain available.')}\n`);
 
-  const readlineInterface = readline.createInterface({ input, output, terminal: true });
+  let readlineInterface = existingInterface;
+  let ownsInterface = false;
+  if (!readlineInterface || readlineInterface.closed) {
+    readlineInterface = readline.createInterface({
+      input,
+      output: promptOutput,
+      terminal: true,
+    });
+    ownsInterface = true;
+  }
   try {
     const answer = (await question(
       readlineInterface,
@@ -50,6 +62,6 @@ export async function runConsentGate({
       : `${colors.amber('⚠')} Consent declined. Remote requests are blocked until you run ${colors.green('/consent accept')}.\n\n`);
     return { config: savedConfig, decided: true, changed: true };
   } finally {
-    readlineInterface.close();
+    if (ownsInterface && !readlineInterface.closed) readlineInterface.close();
   }
 }

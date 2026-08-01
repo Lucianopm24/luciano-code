@@ -15,7 +15,7 @@ import { renderConfig, renderHelp, renderStatus } from './ui/banner.js';
 import { renderTrustStatus, revokeCurrentFolderTrust } from './trust.js';
 import { colors } from './ui/colors.js';
 import { toolInstructions } from './tools.js';
-import { createTerminalRenderer } from './ui/terminal-renderer.js';
+import { createTerminalRenderer, getTerminalStream } from './ui/terminal-renderer.js';
 
 const PROMPT = `${colors.green('luciano-code')} ${colors.dim('>')} `;
 const ACCEPTED = new Set(['y', 'yes', 's', 'si', 'sí']);
@@ -37,7 +37,13 @@ function clearTerminal(stream) {
   stream.clear?.();
 }
 
-export function createCli({ input = process.stdin, output = process.stdout, config = normalizeConfig(), memoryBaseDir } = {}) {
+export function createCli({
+  input = process.stdin,
+  output = process.stdout,
+  config = normalizeConfig(),
+  memoryBaseDir,
+  readlineInterface: existingInterface,
+} = {}) {
   output = createTerminalRenderer(output);
   let readlineInterface;
   let commandQueue = Promise.resolve();
@@ -298,12 +304,14 @@ export function createCli({ input = process.stdin, output = process.stdout, conf
     }
   };
 
-  const createReadline = () => {
-    const nextInterface = readline.createInterface({
-      input,
-      output,
-      terminal: Boolean(output.isTTY),
-    });
+  const createReadline = (reusableInterface) => {
+    const nextInterface = reusableInterface && !reusableInterface.closed
+      ? reusableInterface
+      : readline.createInterface({
+        input,
+        output: getTerminalStream(output),
+        terminal: Boolean(output.isTTY),
+      });
     nextInterface.setPrompt(PROMPT);
     nextInterface.on('line', (line) => {
       commandQueue = commandQueue
@@ -318,7 +326,7 @@ export function createCli({ input = process.stdin, output = process.stdout, conf
     return nextInterface;
   };
 
-  readlineInterface = createReadline();
+  readlineInterface = createReadline(existingInterface);
 
   return {
     start() {

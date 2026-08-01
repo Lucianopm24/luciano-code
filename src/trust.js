@@ -2,7 +2,7 @@ import readline from 'node:readline';
 import path from 'node:path';
 import { box } from './ui/box.js';
 import { colors } from './ui/colors.js';
-import { createTerminalRenderer } from './ui/terminal-renderer.js';
+import { createTerminalRenderer, getTerminalStream } from './ui/terminal-renderer.js';
 import { grantTrust, isTrusted, revokeTrust, saveConfig } from './config.js';
 
 function question(readlineInterface, prompt) {
@@ -21,6 +21,7 @@ export async function runTrustGate({
   input = process.stdin,
   output = process.stdout,
   config = {},
+  readlineInterface: existingInterface,
 } = {}) {
   output = createTerminalRenderer(output);
   const folder = currentFolder();
@@ -45,7 +46,16 @@ export async function runTrustGate({
     colors.amber('Only trust folders whose files and instructions you understand.'),
   ], { title: 'Folder trust required', width: 76, tone: 'green' })}\n\n`);
 
-  const readlineInterface = readline.createInterface({ input, output, terminal: true });
+  let readlineInterface = existingInterface;
+  let ownsInterface = false;
+  if (!readlineInterface || readlineInterface.closed) {
+    readlineInterface = readline.createInterface({
+      input,
+      output: getTerminalStream(output),
+      terminal: true,
+    });
+    ownsInterface = true;
+  }
   try {
     const answer = (await question(
       readlineInterface,
@@ -62,7 +72,7 @@ export async function runTrustGate({
     output.write(`${colors.green('✓')} Trusted folder saved locally for this exact path.\n\n`);
     return { config: savedConfig, trusted: true, skipped: false };
   } finally {
-    readlineInterface.close();
+    if (ownsInterface && !readlineInterface.closed) readlineInterface.close();
   }
 }
 

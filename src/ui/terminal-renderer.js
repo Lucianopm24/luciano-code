@@ -1,6 +1,7 @@
 import { colors } from './colors.js';
 
 const TERMINAL_RENDERER = Symbol('terminalRenderer');
+const TERMINAL_STREAM = Symbol('terminalStream');
 
 function toolKey(request, { eventId } = {}) {
   if (eventId) return `event:${eventId}`;
@@ -26,6 +27,7 @@ export function createTerminalRenderer(stream = process.stdout) {
   const claimedToolEvents = new Set();
   const renderer = {
     [TERMINAL_RENDERER]: true,
+    [TERMINAL_STREAM]: stream,
     get isTTY() {
       return Boolean(stream?.isTTY);
     },
@@ -67,4 +69,8 @@ export function createTerminalRenderer(stream = process.stdout) {
 
 export function isTerminalRenderer(value) {
   return Boolean(value?.[TERMINAL_RENDERER]);
+}
+
+export function getTerminalStream(value) {
+  return value?.[TERMINAL_STREAM] ?? value;
 }

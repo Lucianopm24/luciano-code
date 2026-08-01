@@ -3,7 +3,7 @@ import { box } from './ui/box.js';
 import { colors } from './ui/colors.js';
 import { NvidiaNimClient } from './nvidia.js';
 import { CUSTOM_MODEL_INDEX, defaultModelChoice, modelById, RECOMMENDED_MODELS, renderModelChoices } from './models.js';
-import { createTerminalRenderer } from './ui/terminal-renderer.js';
+import { createTerminalRenderer, getTerminalStream } from './ui/terminal-renderer.js';
 import {
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
@@ -167,7 +167,11 @@ export async function runSetup({
   }
 
   if (!interactive && !readlineInterface) {
-    readlineInterface = readline.createInterface({ input, output, terminal: false });
+    readlineInterface = readline.createInterface({
+      input,
+      output: getTerminalStream(output),
+      terminal: false,
+    });
     ownsInterface = true;
   }
 
@@ -198,7 +202,11 @@ export async function runSetup({
     }
 
     if (!readlineInterface) {
-      readlineInterface = readline.createInterface({ input, output, terminal: true });
+      readlineInterface = readline.createInterface({
+        input,
+        output: getTerminalStream(output),
+        terminal: true,
+      });
       ownsInterface = true;
     }
 
