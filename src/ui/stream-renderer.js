@@ -154,9 +154,9 @@ export function createLiveRenderer(stream, spinner) {
     responseHadTokens = true;
 
     if (!terminal) {
-      stream.write(colors.white(delta));
-      return;
-    }
+    pendingLine += delta;
+    return;
+}
 
     const parts = delta.split('\n');
     for (let index = 0; index < parts.length; index += 1) {
