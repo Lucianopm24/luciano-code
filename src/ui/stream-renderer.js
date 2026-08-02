@@ -184,12 +184,18 @@ export function createLiveRenderer(stream, spinner) {
       stream.write(colors.slate(safeToken));
     },
     writeResponse(token) {
-  console.error('[STREAM TOKEN]', JSON.stringify(token));
-  writeResponseDelta(safeStreamToken(token));
+  const delta = textAccumulator.push(token);
+
+  if (delta) {
+    writeResponseDelta(delta);
+  }
 },
     finish() {
-  if (pendingLine.length > 0) commitLine();
-  else if ((reasoningStarted || responseStarted) && !lineCommitted) stream.write('\n');
+  if (pendingLine.length > 0) {
+    commitLine();
+  } else if ((reasoningStarted || responseStarted) && !lineCommitted) {
+    stream.write('\n');
+  }
 },
     get responseHadTokens() {
       return responseHadTokens;
