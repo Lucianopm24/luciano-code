@@ -13,6 +13,8 @@ A terminal-first AI coding agent for developers who want a focused, premium comm
 - Automatic recovery for NVIDIA NIM overload (`529`) responses, with an interactive fallback after 10 consecutive retries.
 - Interactive recovery for NVIDIA NIM rate-limit (`429`) responses.
 - Workspace tools for listing, reading, creating, and editing files.
+- Web search through SearXNG at `https://search.lucianopm.com` using its JSON API.
+- Global NVIDIA NIM request protection: 35 requests per rolling minute, followed by a 70-second cooldown and visible countdown.
 - Folder trust protection to reduce prompt-injection risks from repository content.
 - Per-operation tool authorization, with optional approval for the rest of the current session.
 - Workspace restrictions that block unsafe paths, protected directories, secrets, private keys, and oversized files.
@@ -104,7 +106,7 @@ The `/models` command still lists model IDs returned by the configured NVIDIA NI
 | `/trust` | Show whether the current folder is trusted. |
 | `/trust reset` | Revoke trust for the current folder. |
 | `/status` | Show workspace and provider status. |
-| `/tools` | Display the agent tool instructions. |
+| `/tools` | Display the agent tool instructions, including web search. |
 | `/nothink on` | Disable model reasoning/thinking when supported. |
 | `/nothink off` | Re-enable model reasoning/thinking. |
 | `/nothink status` | Show the current no-think setting. |
@@ -145,6 +147,7 @@ The agent can use the following workspace tools:
 - `read_file` — read a UTF-8 text file.
 - `write_file` — create or replace a complete file.
 - `edit_file` — replace an exact text snippet in an existing file.
+- `web_search` — search the public web via SearXNG JSON at `https://search.lucianopm.com`.
 
 A typical request might look like:
 
@@ -188,7 +191,10 @@ The configuration directory uses permission `700` and the file uses permission `
 
 Folder trust records are stored separately as exact absolute paths. Resetting trust revokes authorization for the current folder without changing provider settings.
 
-## Provider error recovery
+## Request protection and provider error recovery
+
+Luciano Code counts outbound NVIDIA NIM requests globally in the running process. After 35 requests in a rolling 60-second window, it blocks additional NIM requests for 70 seconds and displays a `Rate Limit Protection` countdown to avoid model locks. SearXNG web search is a separate public search tool and is not counted against the NVIDIA NIM budget.
+
 
 If NVIDIA NIM returns a `529`, Luciano Code automatically retries the request up to 10 consecutive times without opening the recovery prompt. The spinner displays the current retry number while this happens. A successful response resets the consecutive-failure counter.
 
@@ -249,7 +255,8 @@ The main source areas are:
 - `src/models.js` — model presets and selection.
 - `src/setup.js` — interactive setup and masked key capture.
 - `src/trust.js` — folder trust and prompt-injection boundary.
-- `src/nvidia.js` — NVIDIA NIM client, model listing, and SSE streaming.
+- `src/nvidia.js` — NVIDIA NIM client, model listing, rate limiting, and SSE streaming.
+- `src/rate-limit.js` — global rolling-window NVIDIA request protection.
 - `src/tools.js` — workspace tools, path validation, and authorization.
 - `src/ui/markdown.js` — safe terminal Markdown renderer.
 - `src/agent.js` — conversation, streaming, and tool orchestration.

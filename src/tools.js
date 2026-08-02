@@ -15,9 +15,12 @@ import { promisify } from 'node:util';
 const execAsync = promisify(exec);
 import { colors } from './ui/colors.js';
 
+const SEARXNG_URL = 'https://search.lucianopm.com/search';
+const SEARCH_TIMEOUT_MS = 20_000;
+const MAX_SEARCH_RESULTS = 8;
 const MAX_FILE_BYTES = 1_000_000;
 const MAX_LIST_ENTRIES = 200;
-const TOOL_NAMES = new Set(['list_files', 'read_file', 'write_file', 'edit_file', 'execute_command']);
+const TOOL_NAMES = new Set(['list_files', 'read_file', 'write_file', 'edit_file', 'execute_command', 'web_search']);
 const MAX_COMMAND_OUTPUT_BYTES = 1_000_000;
 const COMMAND_TIMEOUT_MS = 120_000;
 
@@ -60,6 +63,22 @@ export const TOOL_DEFINITIONS = [
           replaceAll: { type: 'boolean' },
         },
         required: ['path', 'old', 'new'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Search the public web through the configured SearXNG instance and return concise results with titles, URLs, and snippets.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The web search query.' },
+          categories: { type: 'string', description: 'Optional SearXNG categories, such as general or news.' },
+          language: { type: 'string', description: 'Optional language code, such as all or en.' },
+        },
+        required: ['query'],
       },
     },
   },
@@ -169,8 +188,10 @@ function toolLabel(request) {
     write_file: 'write file',
     edit_file: 'edit file',
     execute_command: 'execute command',
+    web_search: 'web search',
   };
   if (request.tool === 'execute_command') return `${labels[request.tool]}\n${request.arguments?.command || ''}`;
+  if (request.tool === 'web_search') return `${labels[request.tool]} · ${request.arguments?.query || ''}`;
   return `${labels[request.tool] || request.tool} · ${pathValue}`;
 }
 
@@ -246,9 +267,59 @@ export function formatToolRequest(request) {
     return `${toolLabel(request)}\n${colors.dim('New content preview:')}\n${colors.slate(summarizeContent(args.content))}`;
   }
   if (request.tool === 'edit_file') {
-    return `${toolLabel(request)}\n${colors.dim('Replacement preview:')}\n- ${colors.slate(summarizeContent(args.old))}\n+ ${colors.slate(summarizeContent(args.new))}`;
+    const oldPreview = String(args.old ?? '').split(/\r?\n/).slice(0, 8).map((line) => colors.red(`- ${line}`)).join('\n');
+    const newPreview = String(args.new ?? '').split(/\r?\n/).slice(0, 8).map((line) => colors.green(`+ ${line}`)).join('\n');
+    return `${toolLabel(request)}\n${colors.dim('Replacement preview:')}\n${oldPreview}\n${newPreview}`;
   }
   return toolLabel({ ...request, arguments: { ...args, path: target } });
+}
+
+async function webSearch(args) {
+  if (typeof args.query !== 'string' || !args.query.trim()) {
+    throw new Error('web_search requires a non-empty query.');
+  }
+
+  const query = args.query.trim();
+  const url = new URL(SEARXNG_URL);
+  url.searchParams.set('q', query);
+  url.searchParams.set('format', 'json');
+  url.searchParams.set('categories', typeof args.categories === 'string' && args.categories.trim() ? args.categories.trim() : 'general');
+  url.searchParams.set('language', typeof args.language === 'string' && args.language.trim() ? args.language.trim() : 'all');
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  timeout.unref?.();
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    const body = await response.text();
+    if (!response.ok) throw new Error(`SearXNG returned HTTP ${response.status}.`);
+
+    let payload;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      throw new Error('SearXNG returned invalid JSON.');
+    }
+    const results = Array.isArray(payload.results) ? payload.results.slice(0, MAX_SEARCH_RESULTS) : [];
+    if (!results.length) return `Search results for: ${query}\n(no results)`;
+    return [
+      `Search results for: ${query}`,
+      ...results.map((result, index) => {
+        const title = String(result.title || result.url || `Result ${index + 1}`).trim();
+        const resultUrl = String(result.url || result.link || '').trim();
+        const snippet = String(result.content || result.description || '').replace(/\\s+/g, ' ').trim();
+        return `${index + 1}. ${title}\nURL: ${resultUrl || '(no URL)'}\n${snippet || '(no snippet)'}`;
+      }),
+    ].join('\n\n');
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('SearXNG search timed out after 20 seconds.');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function listFiles(root, args) {
@@ -386,6 +457,7 @@ export async function executeTool(root, request, { authorized = false, onCommand
   if (!TOOL_NAMES.has(request?.tool)) throw new Error('Unknown tool request.');
   const args = request.arguments || {};
   switch (request.tool) {
+    case 'web_search': return webSearch(args);
     case 'list_files': return listFiles(root, args);
     case 'read_file': return readWorkspaceFile(root, args);
     case 'write_file': return writeWorkspaceFile(root, args);
@@ -427,6 +499,7 @@ export function toolInstructions() {
     '- read_file: read a text file inside the workspace',
     '- write_file: create or replace a file with complete content',
     '- edit_file: replace an exact snippet in an existing file',
+    '- web_search: search the public web through SearXNG at https://search.lucianopm.com',
     '- execute_command: run one real shell command in the trusted workspace; it always requires explicit authorization',
     'Models that support native OpenAI tool calls may use them. Otherwise request a tool as JSON, preferably with no surrounding prose:',
     '{"tool":"read_file","arguments":{"path":"src/index.js"}}',

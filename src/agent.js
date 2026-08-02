@@ -7,6 +7,7 @@ import { Spinner } from './ui/spinner.js';
 import { renderMarkdown } from './ui/markdown.js';
 import { createLiveRenderer } from './ui/stream-renderer.js';
 import { createTerminalRenderer } from './ui/terminal-renderer.js';
+import { formatUsageSummary, usageTokenCount } from './ui/metrics.js';
 import {
   appendCommandExecution,
   appendConversationMessage,
@@ -24,6 +25,25 @@ import {
 
 const MAX_TOOL_TURNS = 12;
 const MAX_AUTOMATIC_529_RETRIES = 10;
+
+function renderRateLimitProtection(stream, error) {
+  const duration = Math.max(1, Number(error?.retryAfterSeconds) || 70);
+  stream.write(`\n${colors.amber('Rate Limit Protection')}\n`);
+  stream.write(`${colors.slate('You almost reached NVIDIA NIM rate limit. To prevent model locks, you will have to wait 70 seconds before sending more requests.')}\n`);
+  stream.write(`${colors.dim(`Retry available in ${duration} seconds.`)}\n`);
+
+  let remaining = duration;
+  const timer = setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      clearInterval(timer);
+      stream.write(`${colors.green('✓')} Rate limit protection ended. You can send another request.\n`);
+      return;
+    }
+    stream.write(`${colors.dim(`Rate Limit Protection · ${remaining}s remaining`)}\n`);
+  }, 1_000);
+  timer.unref?.();
+}
 
 function isToolSchemaUnsupported(error) {
   return error?.status === 400 || error?.status === 422;
@@ -176,6 +196,8 @@ export async function runPrompt(
   const streamEnabled = Boolean(activeConfig.preferences.stream);
   let nativeToolsEnabled = enableTools;
   const toolResults = new Map();
+  let responseStartedAt = Date.now();
+  let totalResponseTokens = 0;
 
   const recoverProviderError = async (error) => {
     spinner.clear();
@@ -218,6 +240,8 @@ export async function runPrompt(
     while (true) {
       try {
         const response = await client.complete(messages, options);
+        const tokens = usageTokenCount(response?.usage);
+        if (tokens !== null) totalResponseTokens += tokens;
         return { response, cancelled: false };
       } catch (error) {
         if (error?.status === 529 && automatic529Retries < MAX_AUTOMATIC_529_RETRIES) {
@@ -365,7 +389,10 @@ export async function runPrompt(
           spinner.stop('Empty response', 'warning');
           stream.write(`${colors.amber('⚠')} NVIDIA NIM returned an empty response.\n`);
         }
-        if (responseContent) await appendConversationMessage({ role: 'assistant', content: responseContent }, memoryOptions);
+        if (responseContent) {
+          await appendConversationMessage({ role: 'assistant', content: responseContent }, memoryOptions);
+          stream.write(`\n${formatUsageSummary(totalResponseTokens, Date.now() - responseStartedAt)}\n`);
+        }
         return;
       }
 
@@ -411,7 +438,11 @@ export async function runPrompt(
     stream.write(`${colors.amber('⚠')} The tool-call limit was reached before the model produced a final answer.\n`);
   } catch (error) {
     spinner.stop('Request failed', 'error');
-    stream.write(`${colors.red('✗')} ${colors.slate(error.message)}\n`);
+    if (error?.code === 'NVIDIA_RATE_LIMIT_PROTECTION') {
+      renderRateLimitProtection(stream, error);
+    } else {
+      stream.write(`${colors.red('✗')} ${colors.slate(error.message)}\n`);
+    }
   }
 }
 

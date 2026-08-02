@@ -7,6 +7,7 @@ import { runTrustGate } from './trust.js';
 import { runConsentGate } from './consent.js';
 import { renderBanner, renderHelp } from './ui/banner.js';
 import { createTerminalRenderer } from './ui/terminal-renderer.js';
+import { VERSION } from './version.js';
 
 const args = new Set(process.argv.slice(2));
 
@@ -23,7 +24,7 @@ export async function main() {
   }
 
   if (args.has('--version') || args.has('-v')) {
-    output.write('Luciano Code AI v0.4.1\n');
+    output.write(`Luciano Code AI v${VERSION}\n`);
     return;
   }
 

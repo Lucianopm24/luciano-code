@@ -61,3 +61,25 @@ test('textual executions without an event id are not globally suppressed', () =>
   const plain = stripAnsi(output.toString());
   assert.equal((plain.match(/list_files completed\./g) || []).length, 2);
 });
+
+test('edit_file completion renders removed lines red and added lines green', () => {
+  const output = createOutput();
+  const renderer = createTerminalRenderer(output);
+  const request = {
+    tool: 'edit_file',
+    arguments: {
+      path: 'src/example.js',
+      old: 'const old = true;\nreturn old;',
+      new: 'const next = true;\nreturn next;',
+    },
+  };
+
+  renderer.toolCompleted(request);
+
+  const plain = stripAnsi(output.toString());
+  assert.match(plain, /edit_file completed\./);
+  assert.match(plain, /- const old = true;/);
+  assert.match(plain, /- return old;/);
+  assert.match(plain, /\+ const next = true;/);
+  assert.match(plain, /\+ return next;/);
+});

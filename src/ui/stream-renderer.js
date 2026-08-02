@@ -1,5 +1,5 @@
 import { colors, stripAnsi } from './colors.js';
-import { renderMarkdown } from './markdown.js';
+import { renderMarkdownLine } from './markdown.js';
 import { createTerminalRenderer } from './terminal-renderer.js';
 
 const RESPONSE_PREFIX = `${colors.brightGreen('Assistant')} ${colors.dim('›')} `;
@@ -30,21 +30,13 @@ export function safeStreamToken(token) {
 }
 
 /**
- * Normalizes provider chunks at the presentation boundary.
- *
- * Providers normally emit deltas, but some OpenAI-compatible endpoints emit a
- * growing snapshot on every frame. This accumulator handles both cases:
- * - **Delta mode** (default): each chunk is appended directly.
- * - **Cumulative mode**: only the suffix of a growing snapshot is returned.
- *
- * The mode is detected on the fly: if a chunk starts with the current full text
- * and is longer, it's treated as a cumulative snapshot and only the new suffix
- * is emitted. If a chunk does NOT start with the full text, it's treated as a
- * delta and appended normally. This eliminates the fragile `pendingSnapshot`
- * logic that caused duplicate output.
+ * Accepts both normal deltas and providers that send cumulative snapshots.
+ * A possible snapshot is held for one frame so a one-off delta such as `A` ->
+ * `AB` is not lost, while repeated/stale snapshots never duplicate output.
  */
 export function createStreamTextAccumulator() {
   let fullText = '';
+  let pendingSnapshot = '';
   let mode = 'delta';
 
   return {
@@ -57,22 +49,44 @@ export function createStreamTextAccumulator() {
         return chunk;
       }
 
-      // If the new chunk starts with what we already have, it's a cumulative
-      // snapshot — emit only the suffix.
-      if (chunk.startsWith(fullText) && chunk.length > fullText.length) {
-        mode = 'cumulative';
-        const delta = chunk.slice(fullText.length);
-        fullText = chunk;
-        return delta;
+      if (pendingSnapshot) {
+        if (chunk === pendingSnapshot || chunk === fullText || chunk.length < fullText.length) return '';
+        if (chunk.startsWith(fullText) && chunk.length > fullText.length) {
+          const delta = chunk.slice(fullText.length);
+          fullText = chunk;
+          pendingSnapshot = '';
+          mode = 'cumulative';
+          return delta;
+        }
+        pendingSnapshot = '';
+        mode = 'delta';
+        fullText += chunk;
+        return chunk;
       }
 
-      // Otherwise treat it as a delta and append.
+      if (chunk === fullText) {
+        if (mode === 'cumulative') return '';
+        mode = 'delta';
+        fullText += chunk;
+        return chunk;
+      }
+      if (mode === 'cumulative' && chunk.length < fullText.length && fullText.startsWith(chunk)) return '';
+      if (chunk.startsWith(fullText) && chunk.length > fullText.length) {
+        pendingSnapshot = chunk;
+        mode = 'cumulative';
+        return '';
+      }
+
       mode = 'delta';
       fullText += chunk;
       return chunk;
     },
     finish() {
-      return '';
+      if (!pendingSnapshot) return '';
+      const delta = pendingSnapshot.startsWith(fullText) ? pendingSnapshot.slice(fullText.length) : pendingSnapshot;
+      fullText = pendingSnapshot.startsWith(fullText) ? pendingSnapshot : `${fullText}${pendingSnapshot}`;
+      pendingSnapshot = '';
+      return delta;
     },
     get text() {
       return fullText;
@@ -90,10 +104,12 @@ export function createLiveRenderer(stream, spinner) {
   let responseHadTokens = false;
   let lineCommitted = false;
   let pendingLine = '';
-  let renderedLine = '';
-  let codeBlockActive = false;
+  let markdownState = { inCode: false, codeLanguage: '' };
+  let responseText = '';
+  // Stream deltas directly instead of repainting the same line with ANSI.
+  // Repainting is not reliable in every terminal and can appear as duplicated
+  // Assistant lines; the response should be written exactly once in order.
   const terminal = false;
-  const textAccumulator = createStreamTextAccumulator();
 
   const clearProgress = () => {
     if (spinner.started) spinner.clear();
@@ -102,73 +118,39 @@ export function createLiveRenderer(stream, spinner) {
   const beginResponse = () => {
     if (responseStarted) return;
     if (reasoningStarted) stream.write('\n');
-    stream.write(RESPONSE_PREFIX);
+    if (!terminal) stream.write(RESPONSE_PREFIX);
     responseStarted = true;
   };
 
-  const renderStreamingLine = (line, commit = false) => {
-    const fence = line.match(/^\s*```\s*([^\s]*)\s*$/);
-    let formatted;
-    if (codeBlockActive) {
-      formatted = fence
-        ? colors.dim('╰' + '─'.repeat(58))
-        : `${colors.dim('│')} ${colors.mint(line)}`;
-    } else {
-      formatted = fence
-        ? colors.dim(`╭─ ${fence[1] || 'code'} ${'─'.repeat(Math.max(1, 54 - (fence[1] || 'code').length))}`)
-        : renderMarkdown(line);
-    }
-
-    if (commit && fence) codeBlockActive = !codeBlockActive;
-    return formatted;
-  };
-
-  const renderCurrentLine = () => {
-    const formatted = renderStreamingLine(pendingLine);
-    if (terminal) {
-      const prefix = lineCommitted ? CONTINUATION_PREFIX : RESPONSE_PREFIX;
-      stream.write(`\r\u001b[2K${prefix}${formatted}`);
-      renderedLine = formatted;
-    } else if (formatted !== renderedLine) {
-      renderedLine = formatted;
-    }
-  };
-
-  const commitLine = () => {
-    const formatted = renderStreamingLine(pendingLine, true);
-    if (terminal) {
-      const prefix = lineCommitted ? CONTINUATION_PREFIX : RESPONSE_PREFIX;
-      stream.write(`\r\u001b[2K${prefix}${formatted}\n`);
-    } else {
-  const prefix = lineCommitted ? CONTINUATION_PREFIX : RESPONSE_PREFIX;
-  stream.write(`${prefix}${formatted}\n`);
-}
+  const commitMarkdownLine = () => {
+    const rendered = renderMarkdownLine(pendingLine, markdownState);
+    if (rendered) stream.write(rendered);
+    stream.write('\n');
     pendingLine = '';
-    renderedLine = '';
     lineCommitted = true;
   };
 
-  const writeResponseDelta = (delta) => {
+  const isMarkdownLine = (line) => markdownState.inCode
+    || /^\s*(?:#{1,6}\s|[-*+]\s+|\d+[.)]\s+|>\s?|```|\|)/.test(line)
+    || /(?:\*\*|__|~~|`|\[[^\]]+\]\()/.test(line);
+
+  const writeResponseDelta = (value) => {
+    const delta = safeStreamToken(value);
     if (!delta) return;
+    responseText += delta;
     clearProgress();
     beginResponse();
     responseHadTokens = true;
 
-    if (!terminal) {
-    pendingLine += delta;
-    return;
-}
-
     const parts = delta.split('\n');
     for (let index = 0; index < parts.length; index += 1) {
-      pendingLine += parts[index];
+      const part = parts[index];
+      pendingLine += part;
       if (index < parts.length - 1) {
-        commitLine();
-      } else if (pendingLine.length > 0) {
-        lineCommitted = false;
-        renderCurrentLine();
-      } else {
-        lineCommitted = true;
+        commitMarkdownLine();
+      } else if (pendingLine && !isMarkdownLine(pendingLine)) {
+        stream.write(part);
+        pendingLine = '';
       }
     }
   };
@@ -185,15 +167,12 @@ export function createLiveRenderer(stream, spinner) {
       stream.write(colors.slate(safeToken));
     },
     writeResponse(token) {
-  writeResponseDelta(safeStreamToken(token));
-},
+      writeResponseDelta(token);
+    },
     finish() {
-  if (pendingLine.length > 0) {
-    commitLine();
-  } else if ((reasoningStarted || responseStarted) && !lineCommitted) {
-    stream.write('\n');
-  }
-},
+      if (pendingLine.length > 0) commitMarkdownLine();
+      else if ((reasoningStarted || responseStarted) && !lineCommitted) stream.write('\n');
+    },
     get responseHadTokens() {
       return responseHadTokens;
     },
@@ -201,7 +180,7 @@ export function createLiveRenderer(stream, spinner) {
       return reasoningStarted || responseStarted;
     },
     get text() {
-      return textAccumulator.text;
+      return responseText;
     },
   };
 }

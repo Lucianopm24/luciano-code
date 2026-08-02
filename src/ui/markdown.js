@@ -62,6 +62,41 @@ function renderTableLine(line) {
   return `${colors.dim('│')} ${tableCells(line).map((cell) => inlineMarkdown(cell.trim())).join(` ${colors.dim('│')} `)} ${colors.dim('│')}`;
 }
 
+export function renderMarkdownLine(markdownLine = '', state = {}) {
+  const line = sanitize(markdownLine).replace(/\r\n?/g, '');
+  const fence = line.match(/^\s*```\s*([^\s]*)\s*$/);
+  if (fence) {
+    if (state.inCode) {
+      state.inCode = false;
+      state.codeLanguage = '';
+      return colors.dim('╰' + '─'.repeat(58));
+    }
+    state.inCode = true;
+    state.codeLanguage = fence[1] || 'code';
+    return colors.dim(`╭─ ${state.codeLanguage} ${'─'.repeat(Math.max(1, 54 - state.codeLanguage.length))}`);
+  }
+
+  if (state.inCode) return `${colors.dim('│')} ${colors.mint(line)}`;
+
+  const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
+  if (heading) return `${colors.green('◆')} ${colors.brightGreen(colors.bold(inlineMarkdown(heading[2])))}`;
+
+  if (/^\s*(---+|\*\*\*+|___+)\s*$/.test(line)) return colors.dim('─'.repeat(60));
+
+  const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
+  if (unordered) return `${colors.green('•')} ${inlineMarkdown(unordered[1])}`;
+
+  const ordered = line.match(/^\s*(\d+)[.)]\s+(.+)$/);
+  if (ordered) return `${colors.green(`${ordered[1]}.`)} ${inlineMarkdown(ordered[2])}`;
+
+  const quote = line.match(/^\s*>\s?(.*)$/);
+  if (quote) return `${colors.dim('│')} ${colors.slate(inlineMarkdown(quote[1]))}`;
+
+  if (isTableSeparator(line)) return colors.dim('├' + '─'.repeat(58));
+  if (isTableRow(line)) return renderTableLine(line);
+  return inlineMarkdown(line);
+}
+
 export function renderMarkdown(markdown = '') {
   const sourceLines = sanitize(markdown).replace(/\r\n?/g, '\n').split('\n');
   const lines = sourceLines.flatMap((line) => wrapSourceLine(line));

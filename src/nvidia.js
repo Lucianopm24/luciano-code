@@ -1,4 +1,5 @@
 import { getApiKey, hasNvidiaDataConsent, runtimeConfig } from './config.js';
+import { consumeNvidiaRequest } from './rate-limit.js';
 
 function extractError(body) {
   try {
@@ -27,14 +28,13 @@ function mergeToolDelta(toolCalls, deltas = []) {
 
 async function readStream(response, { onToken, onReasoning, noThink = false } = {}) {
   const reader = response.body?.getReader();
-  if (!reader) return { content: '', reasoning: '', toolCalls: [] };
+  if (!reader) return { content: '', reasoning: '', toolCalls: [], usage: null };
 
   const decoder = new TextDecoder();
   let buffer = '';
   let content = '';
   let reasoning = '';
-  let streamedContent = '';
-  let streamedReasoning = '';
+  let usage = null;
   const toolCalls = [];
   const streamedToolFields = new Map();
   let lastToolIndex = null;
@@ -44,31 +44,24 @@ async function readStream(response, { onToken, onReasoning, noThink = false } = 
     const payload = line.slice(5).trim();
     if (!payload || payload === '[DONE]') return payload === '[DONE]';
     try {
-      const choice = JSON.parse(payload).choices?.[0] || {};
+      const parsed = JSON.parse(payload);
+      if (parsed.usage && typeof parsed.usage === 'object') usage = parsed.usage;
+      const choice = parsed.choices?.[0] || {};
       const delta = choice.delta || {};
       const contentToken = typeof delta.content === 'string' ? delta.content : '';
       const reasoningToken = typeof (delta.reasoning_content ?? delta.reasoning) === 'string'
         ? (delta.reasoning_content ?? delta.reasoning)
         : '';
+      // NVIDIA NIM sends incremental deltas, not cumulative snapshots. Preserve
+      // every fragment exactly as received so `Ho`, `la`, ` mun`, `do` remains
+      // an immediate `Ho` + `la` + ` mun` + `do` stream.
       if (contentToken) {
-        const contentDelta = contentToken.startsWith(streamedContent)
-          ? contentToken.slice(streamedContent.length)
-          : contentToken;
-        streamedContent = contentToken.startsWith(streamedContent)
-          ? contentToken
-          : `${streamedContent}${contentToken}`;
-        content += contentDelta;
-onToken?.(contentDelta);
+        content += contentToken;
+        onToken?.(contentToken);
       }
       if (reasoningToken) {
-        const reasoningDelta = reasoningToken.startsWith(streamedReasoning)
-          ? reasoningToken.slice(streamedReasoning.length)
-          : reasoningToken;
-        streamedReasoning = reasoningToken.startsWith(streamedReasoning)
-          ? reasoningToken
-          : `${streamedReasoning}${reasoningToken}`;
-        reasoning += reasoningDelta;
-        if (!noThink) onReasoning?.(reasoningDelta);
+        reasoning += reasoningToken;
+        if (!noThink) onReasoning?.(reasoningToken);
       }
       if (Array.isArray(delta.tool_calls) && delta.tool_calls.length) {
         const normalizedDeltas = delta.tool_calls.map((toolCall) => {
@@ -114,6 +107,7 @@ onToken?.(contentDelta);
           content,
           reasoning: noThink ? '' : reasoning,
           toolCalls: toolCalls.filter(Boolean),
+          usage,
         };
       }
     }
@@ -124,6 +118,7 @@ onToken?.(contentDelta);
     content,
     reasoning: noThink ? '' : reasoning,
     toolCalls: toolCalls.filter(Boolean),
+    usage,
   };
 }
 
@@ -141,6 +136,7 @@ export class NvidiaNimClient {
       throw new Error('NVIDIA API key not configured. Run `luciano-code --setup` or `key set`.');
     }
 
+    consumeNvidiaRequest();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120_000);
     timeout.unref?.();
@@ -155,6 +151,7 @@ export class NvidiaNimClient {
         temperature: this.config.preferences.temperature,
         max_tokens: 2048,
         stream,
+        ...(stream ? { stream_options: { include_usage: true } } : {}),
         ...(this.config.preferences.noThink ? { chat_template_kwargs: { enable_thinking: false } } : {}),
         ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
       };
@@ -175,6 +172,7 @@ export class NvidiaNimClient {
         await response.text();
         const compatibilityBody = { ...requestBody };
         delete compatibilityBody.chat_template_kwargs;
+        consumeNvidiaRequest();
         response = await fetch(`${this.config.baseUrl}/chat/completions`, {
           ...requestOptions,
           body: JSON.stringify(compatibilityBody),
@@ -202,6 +200,7 @@ export class NvidiaNimClient {
         content: message.content || '',
         reasoning: this.config.preferences.noThink ? '' : message.reasoning_content ?? message.reasoning ?? '',
         toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [],
+        usage: payload.usage && typeof payload.usage === 'object' ? payload.usage : null,
       };
     } catch (error) {
       if (error.name === 'AbortError') throw new Error('NVIDIA NIM request timed out after 120 seconds.');
@@ -225,6 +224,7 @@ export class NvidiaNimClient {
     timeout.unref?.();
 
     try {
+      consumeNvidiaRequest();
       const response = await fetch(`${this.config.baseUrl}/models`, {
         headers: {
           Authorization: `Bearer ${apiKey}`,

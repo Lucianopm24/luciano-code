@@ -55,6 +55,13 @@ export function createTerminalRenderer(stream = process.stdout) {
     toolCompleted(request, options = {}) {
       if (!options.claimed && !renderer.claimTool(request, options)) return false;
       renderer.write(`${colors.green('✓')} ${request.tool} completed.\n`);
+      if (request.tool === 'edit_file') {
+        const oldLines = String(request.arguments?.old ?? '').split(/\r?\n/);
+        const newLines = String(request.arguments?.new ?? '').split(/\r?\n/);
+        const removed = oldLines.map((line) => colors.red(`- ${line}`)).join('\n');
+        const added = newLines.map((line) => colors.green(`+ ${line}`)).join('\n');
+        if (removed || added) renderer.write(`${removed}${removed && added ? '\n' : ''}${added}\n`);
+      }
       return true;
     },
     toolFailed(request, message, options = {}) {

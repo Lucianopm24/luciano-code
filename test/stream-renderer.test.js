@@ -5,6 +5,7 @@ import {
   createStreamTextAccumulator,
   supportsInPlaceUpdates,
 } from '../src/ui/stream-renderer.js';
+import { renderMarkdownLine } from '../src/ui/markdown.js';
 import { stripAnsi } from '../src/ui/colors.js';
 
 function createOutput(isTTY) {
@@ -82,15 +83,17 @@ test('repeated cumulative snapshots do not create repeated assistant output', ()
   assert.equal(accumulator.text, 'Hola, soy Luciano');
 });
 
-test('finish flushes a pending final cumulative snapshot through the renderer', () => {
+test('renderer preserves NVIDIA-style incremental deltas immediately', () => {
   const output = createOutput(false);
   const renderer = createLiveRenderer(output, createSpinner());
 
-  renderer.writeResponse('Hola');
-  renderer.writeResponse('Hola, soy Luciano');
-  renderer.finish();
+  for (const chunk of ['Ho', 'la', ' mun', 'do']) {
+    renderer.writeResponse(chunk);
+  }
 
-  assert.equal(stripAnsi(output.toString()), 'Assistant › Hola, soy Luciano\n');
+  assert.equal(stripAnsi(output.toString()), 'Assistant › Hola mundo');
+  renderer.finish();
+  assert.equal(stripAnsi(output.toString()), 'Assistant › Hola mundo\n');
 });
 
 test('ANSI in-place updates are conservative across Windows terminals', () => {
@@ -101,11 +104,11 @@ test('ANSI in-place updates are conservative across Windows terminals', () => {
   assert.equal(supportsInPlaceUpdates({ isTTY: false }, { platform: 'linux', env: {} }), false);
 });
 
-test('non-TTY fallback emits one Assistant prefix without duplicate snapshots', () => {
+test('non-TTY renderer preserves each normalized streamed delta once', () => {
   const output = createOutput(false);
   const renderer = createLiveRenderer(output, createSpinner());
 
-  for (const chunk of ['Hola', 'Hola, soy', 'Hola, soy Luciano']) renderer.writeResponse(chunk);
+  for (const chunk of ['Hola', ', soy', ' Luciano']) renderer.writeResponse(chunk);
   renderer.finish();
 
   const plain = stripAnsi(output.toString());
@@ -113,15 +116,43 @@ test('non-TTY fallback emits one Assistant prefix without duplicate snapshots', 
   assert.equal((plain.match(/Assistant ›/g) || []).length, 1);
 });
 
-test('TTY renderer updates one physical line instead of appending response lines', () => {
+test('TTY renderer streams one response without ANSI repaint duplication', () => {
   const output = createOutput(true);
   const renderer = createLiveRenderer(output, createSpinner());
 
-  for (const chunk of ['Hola', 'Hola, soy', 'Hola, soy Luciano']) renderer.writeResponse(chunk);
+  for (const chunk of ['Hola', ', soy', ' Luciano']) renderer.writeResponse(chunk);
   renderer.finish();
 
   const plain = stripAnsi(output.toString());
-  assert.equal((plain.match(/\nAssistant ›/g) || []).length, 0);
-  assert.match(plain, /Assistant › Hola, soy Luciano/);
-  assert.match(output.toString(), /\r\u001b\[2K/);
+  assert.equal(plain, 'Assistant › Hola, soy Luciano\n');
+  assert.equal((plain.match(/Assistant ›/g) || []).length, 1);
+  assert.doesNotMatch(output.toString(), /\r\u001b\[2K/);
+});
+
+test('TTY multiline response keeps one Assistant prefix and continuation indentation', () => {
+  const output = createOutput(true);
+  const renderer = createLiveRenderer(output, createSpinner());
+
+  for (const chunk of ['Hello\n', 'this is ', 'a test\n', 'Goodbye']) renderer.writeResponse(chunk);
+  renderer.finish();
+
+  const plain = stripAnsi(output.toString());
+  assert.equal((plain.match(/Assistant ›/g) || []).length, 1);
+  assert.match(plain, /Assistant › Hello/);
+  assert.match(plain, /this is a test/);
+  assert.match(plain, /Goodbye/);
+  assert.doesNotMatch(output.toString(), /\r\u001b\[2K/);
+});
+
+test('streaming Markdown renders complete lines and keeps code-block state', () => {
+  const state = { inCode: false, codeLanguage: '' };
+  const heading = stripAnsi(renderMarkdownLine('# Title', state));
+  const codeStart = stripAnsi(renderMarkdownLine('```js', state));
+  const codeLine = stripAnsi(renderMarkdownLine('const answer = 42;', state));
+  const codeEnd = stripAnsi(renderMarkdownLine('```', state));
+
+  assert.match(heading, /Title/);
+  assert.match(codeStart, /js/);
+  assert.equal(codeLine, '│ const answer = 42;');
+  assert.match(codeEnd, /╰/);
 });
