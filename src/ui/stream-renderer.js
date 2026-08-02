@@ -33,92 +33,49 @@ export function safeStreamToken(token) {
  * Normalizes provider chunks at the presentation boundary.
  *
  * Providers normally emit deltas, but some OpenAI-compatible endpoints emit a
- * growing snapshot on every frame. The mode is deliberately conservative:
- * ordinary deltas are appended, while a growing snapshot switches the stream
- * to cumulative mode and only its suffix is returned. Once cumulative mode is
- * known, older snapshots are ignored instead of being printed again. Before
- * confirmation, an ambiguous shorter frame is treated as a stale snapshot;
- * this prioritizes the safety requirement of never duplicating provider frames.
- * Providers that emit true deltas should use distinct delta chunks or rely on
- * the NVIDIA client normalizer before they reach this presentation boundary.
+ * growing snapshot on every frame. This accumulator handles both cases:
+ * - **Delta mode** (default): each chunk is appended directly.
+ * - **Cumulative mode**: only the suffix of a growing snapshot is returned.
+ *
+ * The mode is detected on the fly: if a chunk starts with the current full text
+ * and is longer, it's treated as a cumulative snapshot and only the new suffix
+ * is emitted. If a chunk does NOT start with the full text, it's treated as a
+ * delta and appended normally. This eliminates the fragile `pendingSnapshot`
+ * logic that caused duplicate output.
  */
 export function createStreamTextAccumulator() {
   let fullText = '';
-  let mode = 'unknown';
-  let pendingSnapshot = '';
-
-  const flushPendingAsDelta = () => {
-    if (!pendingSnapshot) return '';
-    const delta = pendingSnapshot;
-    fullText += delta;
-    pendingSnapshot = '';
-    mode = 'delta';
-    return delta;
-  };
+  let mode = 'delta';
 
   return {
     push(value) {
       const chunk = safeStreamToken(value);
       if (!chunk) return '';
-      if (mode === 'cumulative') {
-        if (chunk === fullText || fullText.startsWith(chunk)) return '';
-        if (chunk.startsWith(fullText)) {
-          const delta = chunk.slice(fullText.length);
-          fullText = chunk;
-          return delta;
-        }
-        fullText += chunk;
-        return chunk;
-      }
 
       if (!fullText) {
         fullText = chunk;
         return chunk;
       }
 
-      if (pendingSnapshot) {
-        if (chunk === fullText || fullText.startsWith(chunk) || pendingSnapshot.startsWith(chunk)) {
-          // A repeated or shorter frame is a stale snapshot while the format is
-          // still being determined; keep waiting for a confirming growth.
-          return '';
-        }
-        if (chunk === pendingSnapshot || chunk.startsWith(pendingSnapshot)) {
-          mode = 'cumulative';
-          const delta = chunk.slice(fullText.length);
-          fullText = chunk;
-          pendingSnapshot = '';
-          return delta;
-        }
-
-        const previousDelta = flushPendingAsDelta();
-        const nextDelta = this.push(chunk);
-        return previousDelta + nextDelta;
-      }
-
+      // If the new chunk starts with what we already have, it's a cumulative
+      // snapshot — emit only the suffix.
       if (chunk.startsWith(fullText) && chunk.length > fullText.length) {
-        // Hold the first ambiguous growth. A second consecutive growth confirms
-        // cumulative snapshots; otherwise the held chunk is a normal delta.
-        pendingSnapshot = chunk;
-        return '';
+        mode = 'cumulative';
+        const delta = chunk.slice(fullText.length);
+        fullText = chunk;
+        return delta;
       }
 
+      // Otherwise treat it as a delta and append.
       mode = 'delta';
       fullText += chunk;
       return chunk;
     },
     finish() {
-      if (!pendingSnapshot) return '';
-      if (pendingSnapshot.startsWith(fullText)) {
-        const delta = pendingSnapshot.slice(fullText.length);
-        fullText = pendingSnapshot;
-        pendingSnapshot = '';
-        mode = 'cumulative';
-        return delta;
-      }
-      return flushPendingAsDelta();
+      return '';
     },
     get text() {
-      return fullText + pendingSnapshot;
+      return fullText;
     },
     get mode() {
       return mode;
