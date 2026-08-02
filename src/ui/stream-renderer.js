@@ -184,6 +184,7 @@ export function createLiveRenderer(stream, spinner) {
       stream.write(colors.slate(safeToken));
     },
     writeResponse(token) {
+  console.error('[STREAM TOKEN]', JSON.stringify(token));
   writeResponseDelta(safeStreamToken(token));
 },
     finish() {
