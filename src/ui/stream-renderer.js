@@ -184,11 +184,7 @@ export function createLiveRenderer(stream, spinner) {
       stream.write(colors.slate(safeToken));
     },
     writeResponse(token) {
-  const delta = textAccumulator.push(token);
-
-  if (delta) {
-    writeResponseDelta(delta);
-  }
+  writeResponseDelta(safeStreamToken(token));
 },
     finish() {
   if (pendingLine.length > 0) {
