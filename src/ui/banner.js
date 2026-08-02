@@ -145,7 +145,7 @@ export function renderStatus(config = normalizeConfig()) {
     `${colors.dim(symbols.bullet)} ${colors.slate(`Model: ${config.model}`)}`,
     `${colors.dim(symbols.bullet)} ${colors.slate(`Key: ${maskApiKey(getApiKey(runtime))}${runtime.keySource === 'environment' ? ' · environment override' : ''}`)}`,
     `${colors.dim(symbols.bullet)} ${colors.slate(`Language: ${config.preferences.language} · stream: ${config.preferences.stream ? 'on' : 'off'} · no-think: ${config.preferences.noThink ? 'on' : 'off'}`)}`,
-    `${colors.dim(symbols.bullet)} ${colors.slate('Tools: list/read/write/edit · authorization per operation or session')}`,
+    `${colors.dim(symbols.bullet)} ${colors.slate('Tools: list/read/write/edit/command · authorization per operation or session')}`,
   ].join('\n');
 }
 

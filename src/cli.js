@@ -257,7 +257,13 @@ export function createCli({
           }
           break;
         case 'demo':
-          await runDemo(output);
+          await runDemo(output, {
+            config: activeConfig,
+            input,
+            readlineInterface,
+            ask,
+            memoryBaseDir,
+          });
           break;
         case 'analyze':
         case 'analiza':

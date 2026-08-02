@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, rename, unlink, writeFile, readdir } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, readFile, rename, unlink, writeFile, readdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +7,7 @@ export const MEMORY_DIR = path.join(os.homedir(), '.config', 'luciano-code');
 export const CONVERSATIONS_DIR = path.join(MEMORY_DIR, 'conversations');
 export const CURRENT_CONVERSATION_PATH = path.join(CONVERSATIONS_DIR, 'current.json');
 export const HISTORY_DIR = path.join(CONVERSATIONS_DIR, 'history');
+export const COMMAND_LOG_PATH = path.join(MEMORY_DIR, 'commands.jsonl');
 
 const ALLOWED_ROLES = new Set(['user', 'assistant', 'system']);
 const API_KEY_PATTERNS = [
@@ -191,6 +192,24 @@ export async function appendConversationMessage(message, { baseDir = MEMORY_DIR 
   if (!normalizedMessage) return conversation;
   conversation.messages.push(normalizedMessage);
   return saveCurrentConversation(conversation, { baseDir });
+}
+
+export async function appendCommandExecution(result, { baseDir = MEMORY_DIR } = {}) {
+  if (!result || typeof result.command !== 'string') return;
+  await ensureDirectories(baseDir);
+  const logPath = path.join(baseDir, path.basename(COMMAND_LOG_PATH));
+  const record = {
+    timestamp: now(),
+    command: redactSecrets(result.command),
+    cwd: redactSecrets(result.cwd || '.'),
+    stdout: redactSecrets(result.stdout || ''),
+    stderr: redactSecrets(result.stderr || ''),
+    exitCode: Number.isInteger(result.exitCode) ? result.exitCode : 1,
+    signal: result.signal || null,
+  };
+  await appendFile(logPath, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
+  await chmod(logPath, 0o600);
+  return record;
 }
 
 export function selectContextMessages(messages, maxMessages = 24) {

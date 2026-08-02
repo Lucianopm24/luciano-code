@@ -1,3 +1,4 @@
+import { exec } from 'node:child_process';
 import {
   lstat,
   readdir,
@@ -9,11 +10,16 @@ import {
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
+
+const execAsync = promisify(exec);
 import { colors } from './ui/colors.js';
 
 const MAX_FILE_BYTES = 1_000_000;
 const MAX_LIST_ENTRIES = 200;
-const TOOL_NAMES = new Set(['list_files', 'read_file', 'write_file', 'edit_file']);
+const TOOL_NAMES = new Set(['list_files', 'read_file', 'write_file', 'edit_file', 'execute_command']);
+const MAX_COMMAND_OUTPUT_BYTES = 1_000_000;
+const COMMAND_TIMEOUT_MS = 120_000;
 
 export const TOOL_DEFINITIONS = [
   {
@@ -54,6 +60,21 @@ export const TOOL_DEFINITIONS = [
           replaceAll: { type: 'boolean' },
         },
         required: ['path', 'old', 'new'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'execute_command',
+      description: 'Execute a real shell command in the trusted workspace after explicit user authorization.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'The exact command to execute.' },
+          cwd: { type: 'string', description: 'Optional relative working directory inside the workspace.' },
+        },
+        required: ['command'],
       },
     },
   },
@@ -147,7 +168,9 @@ function toolLabel(request) {
     read_file: 'read file',
     write_file: 'write file',
     edit_file: 'edit file',
+    execute_command: 'execute command',
   };
+  if (request.tool === 'execute_command') return `${labels[request.tool]}\n${request.arguments?.command || ''}`;
   return `${labels[request.tool] || request.tool} · ${pathValue}`;
 }
 
@@ -273,6 +296,69 @@ async function writeWorkspaceFile(root, args) {
   return `Wrote ${target.relativePath} (${Buffer.byteLength(args.content, 'utf8')} bytes).`;
 }
 
+async function executeCommand(root, args) {
+  if (typeof args.command !== 'string' || !args.command.trim()) {
+    throw new Error('execute_command requires a non-empty command string.');
+  }
+  const requestedCwd = args.cwd || '.';
+  const target = await resolveExistingPath(root, requestedCwd);
+  const info = await lstat(target.absolutePath);
+  if (!info.isDirectory()) throw new Error(`${target.relativePath} is not a directory.`);
+
+  const command = args.command.trim();
+  const shell = process.platform === 'win32'
+    ? process.env.ComSpec || 'cmd.exe'
+    : process.env.SHELL || '/bin/sh';
+  let stdout = '';
+  let stderr = '';
+  let exitCode = 0;
+  let signal = null;
+  try {
+    const result = await execAsync(command, {
+      cwd: target.absolutePath,
+      shell,
+      timeout: COMMAND_TIMEOUT_MS,
+      maxBuffer: MAX_COMMAND_OUTPUT_BYTES,
+      windowsHide: true,
+    });
+    stdout = result.stdout;
+    stderr = result.stderr;
+  } catch (error) {
+    stdout = error.stdout || '';
+    stderr = error.stderr || '';
+    exitCode = Number.isInteger(error.code) ? error.code : 1;
+    signal = error.signal || null;
+  }
+
+  return {
+    command,
+    cwd: target.relativePath,
+    stdout: String(stdout),
+    stderr: String(stderr),
+    exitCode,
+    signal,
+  };
+}
+
+function formatCommandResult(result) {
+  const status = result.exitCode === 0
+    ? 'Command completed'
+    : `Command failed (exit code ${result.exitCode})`;
+  const output = result.stdout || '(no stdout)';
+  const errors = result.stderr || '(no stderr)';
+  return [
+    `${status}: ${result.command}`,
+    `cwd: ${result.cwd}`,
+    `exit code: ${result.exitCode}`,
+    '',
+    'stdout:',
+    output,
+    '',
+    'stderr:',
+    errors,
+  ].join('\n');
+}
+
 async function editWorkspaceFile(root, args) {
   const target = await resolveExistingPath(root, args.path || args.file);
   const info = await lstat(target.absolutePath);
@@ -293,7 +379,10 @@ async function editWorkspaceFile(root, args) {
   return `Edited ${target.relativePath} (${occurrences} replacement${occurrences === 1 ? '' : 's'}).`;
 }
 
-export async function executeTool(root, request) {
+export async function executeTool(root, request, { authorized = false, onCommandResult } = {}) {
+  if (request?.tool === 'execute_command' && authorized !== true) {
+    throw new Error('execute_command requires explicit user authorization.');
+  }
   if (!TOOL_NAMES.has(request?.tool)) throw new Error('Unknown tool request.');
   const args = request.arguments || {};
   switch (request.tool) {
@@ -301,6 +390,11 @@ export async function executeTool(root, request) {
     case 'read_file': return readWorkspaceFile(root, args);
     case 'write_file': return writeWorkspaceFile(root, args);
     case 'edit_file': return editWorkspaceFile(root, args);
+    case 'execute_command': {
+      const result = await executeCommand(root, args);
+      await onCommandResult?.(result);
+      return formatCommandResult(result);
+    }
     default: throw new Error('Unknown tool request.');
   }
 }
@@ -333,6 +427,7 @@ export function toolInstructions() {
     '- read_file: read a text file inside the workspace',
     '- write_file: create or replace a file with complete content',
     '- edit_file: replace an exact snippet in an existing file',
+    '- execute_command: run one real shell command in the trusted workspace; it always requires explicit authorization',
     'Models that support native OpenAI tool calls may use them. Otherwise request a tool as JSON, preferably with no surrounding prose:',
     '{"tool":"read_file","arguments":{"path":"src/index.js"}}',
     'After a tool result, continue reasoning. Never invent a tool result. Never request paths outside the workspace.',

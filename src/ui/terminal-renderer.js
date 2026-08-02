@@ -1,4 +1,12 @@
-import { colors } from './colors.js';
+import { colors, stripAnsi } from './colors.js';
+import { box } from './box.js';
+
+function safeCommandOutput(value) {
+  return stripAnsi(String(value ?? ''))
+    .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g, '')
+    .replace(/\u001b[^\n]*/g, '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+}
 
 const TERMINAL_RENDERER = Symbol('terminalRenderer');
 const TERMINAL_STREAM = Symbol('terminalStream');
@@ -57,6 +65,31 @@ export function createTerminalRenderer(stream = process.stdout) {
     toolRejected(reason, request, options = {}) {
       if (request && !options.claimed && !renderer.claimTool(request, options)) return false;
       renderer.write(`${colors.amber('⚠')} ${reason}\n`);
+      return true;
+    },
+    commandCompleted(request, result, options = {}) {
+      if (!options.claimed && !renderer.claimTool(request, options)) return false;
+      const limit = 2_000;
+      const trimOutput = (value) => {
+        const text = safeCommandOutput(value).trim() || '(no output)';
+        const clipped = text.length > limit ? `${text.slice(0, limit)}\n… output truncated for display` : text;
+        return clipped.split(/\r?\n/).map((line) => colors.slate(line));
+      };
+      const stdout = trimOutput(result?.stdout);
+      const stderr = trimOutput(result?.stderr);
+      const terminalWidth = Number(renderer.columns);
+      const maxWidth = Number.isFinite(terminalWidth) && terminalWidth > 0 ? Math.max(12, terminalWidth - 4) : 46;
+      const width = Math.min(72, maxWidth);
+      renderer.write(`${box([
+        `${colors.green('✓')} ${colors.white('execute_command')} · exit code ${result?.exitCode ?? 1}`,
+        `${colors.dim('cwd:')} ${colors.slate(result?.cwd || '.')}`,
+        '',
+        colors.dim('stdout'),
+        ...stdout,
+        '',
+        colors.dim('stderr'),
+        ...stderr,
+      ], { title: 'Command result', width, maxWidth: width, tone: result?.exitCode === 0 ? 'green' : 'amber' })}\n`);
       return true;
     },
     clear() {

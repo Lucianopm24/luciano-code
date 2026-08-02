@@ -1,4 +1,4 @@
-import { colors, visibleLength } from './colors.js';
+import { colors, stripAnsi, visibleLength } from './colors.js';
 
 const GLYPHS = {
   topLeft: '╭',
@@ -9,12 +9,19 @@ const GLYPHS = {
   vertical: '│',
 };
 
-function fitLine(content, width) {
-  const padding = Math.max(0, width - visibleLength(content));
-  return `${GLYPHS.vertical} ${content}${' '.repeat(padding)} ${GLYPHS.vertical}`;
+function truncateLine(content, width) {
+  if (visibleLength(content) <= width) return content;
+  if (width <= 1) return '…'.slice(0, width);
+  return `${stripAnsi(content).slice(0, width - 1)}…`;
 }
 
-export function box(lines, { title = '', width, tone = 'green' } = {}) {
+function fitLine(content, width) {
+  const safeContent = truncateLine(content, width);
+  const padding = Math.max(0, width - visibleLength(safeContent));
+  return `${GLYPHS.vertical} ${safeContent}${' '.repeat(padding)} ${GLYPHS.vertical}`;
+}
+
+export function box(lines, { title = '', width, maxWidth, tone = 'green' } = {}) {
   const content = lines.map(String);
   const titleLength = title ? visibleLength(title) + 3 : 0;
   const calculatedWidth = Math.max(
@@ -22,8 +29,10 @@ export function box(lines, { title = '', width, tone = 'green' } = {}) {
     titleLength,
     0,
   );
-  const innerWidth = Math.max(width ?? calculatedWidth, calculatedWidth, 1);
-  const topTitle = title ? `${GLYPHS.horizontal} ${colors[tone](title)} ` : '';
+  const requestedWidth = Math.max(width ?? calculatedWidth, calculatedWidth, 1);
+  const innerWidth = Math.max(1, Math.min(requestedWidth, Number.isFinite(Number(maxWidth)) ? Number(maxWidth) : requestedWidth));
+  const safeTitle = title ? truncateLine(title, Math.max(1, innerWidth - 3)) : '';
+  const topTitle = safeTitle ? `${GLYPHS.horizontal} ${colors[tone](safeTitle)} ` : '';
   const remaining = Math.max(1, innerWidth + 2 - visibleLength(topTitle));
 
   return [

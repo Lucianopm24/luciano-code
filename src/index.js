@@ -70,7 +70,12 @@ export async function main() {
     output.write(`${renderBanner(activeConfig, output.columns)}\n`);
 
     if (args.has('--demo')) {
-      await runDemo(output);
+      await runDemo(output, {
+        config: activeConfig,
+        input: process.stdin,
+        readlineInterface: startupReadline,
+        memoryBaseDir: undefined,
+      });
       return;
     }
 

@@ -7,7 +7,12 @@ import { Spinner } from './ui/spinner.js';
 import { renderMarkdown } from './ui/markdown.js';
 import { createLiveRenderer } from './ui/stream-renderer.js';
 import { createTerminalRenderer } from './ui/terminal-renderer.js';
-import { appendConversationMessage, loadCurrentConversation, selectContextMessages } from './memory.js';
+import {
+  appendCommandExecution,
+  appendConversationMessage,
+  loadCurrentConversation,
+  selectContextMessages,
+} from './memory.js';
 import {
   createToolAuthorizer,
   executeTool,
@@ -56,7 +61,14 @@ function toolExecutionKey(request) {
   return request?.callId ? `call:${request.callId}` : null;
 }
 
-async function runAuthorizedTool(request, { authorizeTool, root, stream, spinner, toolResults }) {
+async function runAuthorizedTool(request, {
+  authorizeTool,
+  root,
+  stream,
+  spinner,
+  toolResults,
+  memoryBaseDir,
+}) {
   const executionRequest = request?.eventId || request?.callId
     ? request
     : { ...request, eventId: `tool-execution-${randomUUID()}` };
@@ -71,8 +83,23 @@ async function runAuthorizedTool(request, { authorizeTool, root, stream, spinner
     stream.toolRejected(authorization.reason, executionRequest, { eventId: eventKey });
   } else {
     try {
-      result = await executeTool(root, executionRequest);
-      stream.toolCompleted(executionRequest, { eventId: eventKey });
+      result = await executeTool(root, executionRequest, {
+        authorized: true,
+        onCommandResult: async (commandResult) => {
+          try {
+            await appendCommandExecution(
+              commandResult,
+              memoryBaseDir ? { baseDir: memoryBaseDir } : {},
+            );
+          } catch (error) {
+            stream.write(`${colors.amber('⚠')} Command result was not saved to local memory: ${colors.slate(error.message)}\n`);
+          }
+          stream.commandCompleted?.(executionRequest, commandResult, { eventId: eventKey });
+        },
+      });
+      if (executionRequest.tool !== 'execute_command') {
+        stream.toolCompleted(executionRequest, { eventId: eventKey });
+      }
     } catch (error) {
       result = `Tool failed: ${error.message}`;
       stream.toolFailed(executionRequest, error.message, { eventId: eventKey });
@@ -94,6 +121,7 @@ export async function runPrompt(
     initialToolRequests = [],
     onInitialToolResult,
     memoryBaseDir,
+    enableTools = true,
   } = {},
 ) {
   stream = createTerminalRenderer(stream);
@@ -146,7 +174,7 @@ export async function runPrompt(
     ask,
   });
   const streamEnabled = Boolean(activeConfig.preferences.stream);
-  let nativeToolsEnabled = true;
+  let nativeToolsEnabled = enableTools;
   const toolResults = new Map();
 
   const recoverProviderError = async (error) => {
@@ -225,6 +253,7 @@ export async function runPrompt(
         stream,
         spinner,
         toolResults,
+        memoryBaseDir,
       });
       messages.push({
         role: 'user',
@@ -311,7 +340,9 @@ export async function runPrompt(
       const nativeCalls = nativeToolsEnabled && typeof response === 'object' && Array.isArray(response.toolCalls)
         ? response.toolCalls.map(nativeToolRequest).filter(Boolean)
         : [];
-      const parsedTextualRequest = nativeCalls.length ? null : parseToolRequest(responseContent);
+      const parsedTextualRequest = enableTools && !nativeCalls.length
+        ? parseToolRequest(responseContent)
+        : null;
       const textualRequest = parsedTextualRequest
         ? { ...parsedTextualRequest, eventId: `text-turn-${turn}` }
         : null;
@@ -354,6 +385,7 @@ export async function runPrompt(
             stream,
             spinner,
             toolResults,
+            memoryBaseDir,
           });
           messages.push({
             role: 'tool',
@@ -368,6 +400,7 @@ export async function runPrompt(
           stream,
           spinner,
           toolResults,
+          memoryBaseDir,
         });
         messages.push({ role: 'assistant', content: responseContent });
         messages.push({ role: 'user', content: toolResultMessage(textualRequest, result) });
@@ -421,10 +454,10 @@ async function preflightEmptyWorkspace(config, stream, options = {}) {
   if (!authorization.approved) return false;
 
   try {
-    const result = await executeTool(workspaceRoot(), request);
+    const result = await executeTool(workspaceRoot(), request, { authorized: true });
     output.toolCompleted(request, { eventId: `analyze-preflight-list-${randomUUID()}` });
     if (result.includes('\\n(empty)')) {
-      output.write(`${colors.brightGreen('Assistant')} ${colors.dim('›')}\\nWorkspace is empty.\\n`);
+      output.write(`${colors.brightGreen('Assistant')} ${colors.dim('›')}\nWorkspace is empty.\n`);
       return true;
     }
   } catch (error) {

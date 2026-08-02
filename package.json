@@ -1,6 +1,6 @@
 {
   "name": "luciano-code",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "A premium terminal-first AI coding agent with safe, user-authorized workspace tools.",
   "type": "module",
   "bin": {
