@@ -92,7 +92,7 @@ export function createLiveRenderer(stream, spinner) {
   let pendingLine = '';
   let renderedLine = '';
   let codeBlockActive = false;
-  const terminal = supportsInPlaceUpdates(stream);
+  const terminal = false;
   const textAccumulator = createStreamTextAccumulator();
 
   const clearProgress = () => {
