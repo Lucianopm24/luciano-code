@@ -140,8 +140,9 @@ export function createLiveRenderer(stream, spinner) {
       const prefix = lineCommitted ? CONTINUATION_PREFIX : RESPONSE_PREFIX;
       stream.write(`\r\u001b[2K${prefix}${formatted}\n`);
     } else {
-      stream.write('\n');
-    }
+  const prefix = lineCommitted ? CONTINUATION_PREFIX : RESPONSE_PREFIX;
+  stream.write(`${prefix}${formatted}\n`);
+}
     pendingLine = '';
     renderedLine = '';
     lineCommitted = true;
