@@ -58,7 +58,6 @@ async function readStream(response, { onToken, onReasoning, noThink = false } = 
           ? contentToken
           : `${streamedContent}${contentToken}`;
         content += contentDelta;
-        console.error('[NVIDIA DELTA]', JSON.stringify(contentDelta));
 onToken?.(contentDelta);
       }
       if (reasoningToken) {
