@@ -149,7 +149,7 @@ export class NvidiaNimClient {
         model: this.config.model,
         messages,
         temperature: this.config.preferences.temperature,
-        max_tokens: 2048,
+        max_tokens: this.config.preferences.maxTokens,
         stream,
         ...(stream ? { stream_options: { include_usage: true } } : {}),
         ...(this.config.preferences.noThink ? { chat_template_kwargs: { enable_thinking: false } } : {}),
