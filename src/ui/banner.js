@@ -109,6 +109,10 @@ export function renderBanner(config = normalizeConfig(), columns = getTerminalWi
 
 export function renderHelp() {
   return box([
+    `${colors.green('/login')}      Sign in with your Luciano Code account`,
+    `${colors.green('/sync')}       Sync the account API key and model`,
+    `${colors.green('/whoami')}     Show the signed-in account identity`,
+    `${colors.green('/logout')}     Sign out and remove the local account session`,
     `${colors.green('/setup')}      Configure provider and preferences`,
     `${colors.green('/key set')}  Replace the NVIDIA API key`,
     `${colors.green('/model set')} Choose or change the active NIM model`,
@@ -143,7 +147,7 @@ export function renderStatus(config = normalizeConfig()) {
     statusLine('Connected to local workspace', 'success'),
     statusLine(configured ? 'NVIDIA NIM provider configured' : 'NVIDIA NIM provider not configured', configured ? 'success' : 'warning'),
     `${colors.dim(symbols.bullet)} ${colors.slate(`Model: ${config.model}`)}`,
-    `${colors.dim(symbols.bullet)} ${colors.slate(`Key: ${maskApiKey(getApiKey(runtime))}${runtime.keySource === 'environment' ? ' · environment override' : ''}`)}`,
+    `${colors.dim(symbols.bullet)} ${colors.slate(`Key: ${maskApiKey(getApiKey(runtime))}${runtime.keySource === 'environment' ? ' · environment override' : runtime.keySource === 'account' ? ' · account session' : ''}`)}`,
     `${colors.dim(symbols.bullet)} ${colors.slate(`Language: ${config.preferences.language} · stream: ${config.preferences.stream ? 'on' : 'off'} · no-think: ${config.preferences.noThink ? 'on' : 'off'}`)}`,
     `${colors.dim(symbols.bullet)} ${colors.slate('Tools: list/read/write/edit/command · authorization per operation or session')}`,
   ].join('\n');
@@ -155,7 +159,7 @@ export function renderConfig(config = normalizeConfig()) {
     `${colors.dim('Provider')}  ${colors.white('NVIDIA NIM')}`,
     `${colors.dim('Endpoint')}  ${colors.slate(config.baseUrl)}`,
     `${colors.dim('Model')}     ${colors.white(config.model)}`,
-    `${colors.dim('API key')}   ${colors.slate(maskApiKey(getApiKey(runtime)))}${runtime.keySource === 'environment' ? colors.dim(' (environment)') : ''}`,
+    `${colors.dim('API key')}   ${colors.slate(maskApiKey(getApiKey(runtime)))}${runtime.keySource === 'environment' ? colors.dim(' (environment)') : runtime.keySource === 'account' ? colors.dim(' (account)') : ''}`,
     `${colors.dim('Language')}  ${colors.white(config.preferences.language)}`,
     `${colors.dim('Stream')}    ${colors.white(config.preferences.stream ? 'enabled' : 'disabled')}`,
     `${colors.dim('No-think')}  ${colors.white(config.preferences.noThink ? 'enabled' : 'disabled')}`,

@@ -1,6 +1,6 @@
 import readline from 'node:readline';
 import { createCli } from './cli.js';
-import { loadConfig } from './config.js';
+import { loadConfig, normalizeConfig, saveConfig } from './config.js';
 import { runDemo } from './demo.js';
 import { runSetup } from './setup.js';
 import { runTrustGate } from './trust.js';
@@ -8,6 +8,7 @@ import { runConsentGate } from './consent.js';
 import { renderBanner, renderHelp } from './ui/banner.js';
 import { createTerminalRenderer } from './ui/terminal-renderer.js';
 import { VERSION } from './version.js';
+import { initializeAccountSession } from './auth.js';
 
 const args = new Set(process.argv.slice(2));
 
@@ -56,8 +57,13 @@ export async function main() {
       return;
     }
 
-    const shouldSetup = args.has('--setup') || (!exists && interactive);
     let activeConfig = consentResult.config;
+    const manualModel = activeConfig.model;
+    const accountSession = await initializeAccountSession({ output });
+    const shouldSetup = args.has('--setup') || (!exists && interactive && !accountSession.active);
+    if (accountSession.config) {
+      activeConfig = await saveConfig(normalizeConfig({ ...activeConfig, ...accountSession.config }));
+    }
 
     if (shouldSetup) {
       activeConfig = await runSetup({
@@ -82,6 +88,7 @@ export async function main() {
 
     createCli({
       config: activeConfig,
+      manualModel,
       output,
       readlineInterface: startupReadline,
     }).start();

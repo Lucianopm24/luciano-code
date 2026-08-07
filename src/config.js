@@ -2,6 +2,7 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promi
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { getSessionApiKey } from './auth.js';
 
 export const DEFAULT_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 export const DEFAULT_MODEL = 'deepseek-ai/deepseek-v4-flash';
@@ -97,8 +98,9 @@ export function revokeTrust(config, targetPath = process.cwd()) {
 }
 
 export function getApiKey(config) {
+  const accountKey = getSessionApiKey();
   const environmentKey = process.env.NVIDIA_API_KEY?.trim();
-  return environmentKey || config.apiKey || '';
+  return accountKey || environmentKey || config.apiKey || '';
 }
 
 export function isConfigured(config) {
@@ -164,6 +166,12 @@ export function runtimeConfig(config) {
   return {
     ...normalizeConfig(config),
     apiKey: getApiKey(config),
-    keySource: process.env.NVIDIA_API_KEY?.trim() ? 'environment' : config.apiKey ? 'local' : 'none',
+    keySource: getSessionApiKey()
+      ? 'account'
+      : process.env.NVIDIA_API_KEY?.trim()
+        ? 'environment'
+        : config.apiKey
+          ? 'local'
+          : 'none',
   };
 }

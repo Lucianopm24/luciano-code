@@ -16,6 +16,14 @@ import { renderTrustStatus, revokeCurrentFolderTrust } from './trust.js';
 import { colors } from './ui/colors.js';
 import { toolInstructions } from './tools.js';
 import { createTerminalRenderer, getTerminalStream } from './ui/terminal-renderer.js';
+import {
+  accountIdentity,
+  clearAuth,
+  clearSessionApiKey,
+  loadAuth,
+  runLoginFlow,
+  syncAccountSession,
+} from './auth.js';
 
 const PROMPT = `${colors.green('luciano-code')} ${colors.dim('>')} `;
 const ACCEPTED = new Set(['y', 'yes', 's', 'si', 'sí']);
@@ -42,12 +50,14 @@ export function createCli({
   output = process.stdout,
   config = normalizeConfig(),
   memoryBaseDir,
+  manualModel,
   readlineInterface: existingInterface,
 } = {}) {
   output = createTerminalRenderer(output);
   let readlineInterface;
   let commandQueue = Promise.resolve();
   let activeConfig = normalizeConfig(config);
+  const fallbackModel = manualModel || activeConfig.model;
   let restarting = false;
 
   const handleCommand = async (rawInput) => {
@@ -77,6 +87,50 @@ export function createCli({
         case '?':
           output.write(`\n${renderHelp()}\n`);
           break;
+        case 'login':
+          if (!input.isTTY || !output.isTTY) {
+            output.write(`${colors.amber('⚠')} /login requires an interactive terminal. Run ${colors.green('luciano-code')} directly.\n`);
+            break;
+          }
+          await runLoginFlow({ ask, output });
+          break;
+        case 'sync': {
+          const result = await syncAccountSession({ output });
+          if (!result.authenticated) {
+            activeConfig = normalizeConfig({ ...activeConfig, model: fallbackModel });
+            if (!result.expired) {
+              output.write(`${colors.amber('⚠')} No account session found. Run ${colors.green('/login')} first.\n`);
+            }
+            break;
+          }
+          if (result.config) {
+            activeConfig = await saveConfig(normalizeConfig({ ...activeConfig, ...result.config }));
+            output.write(`${colors.green('✓')} API key synchronized from your account${result.config.model ? ` · model ${colors.white(result.config.model)}` : ''}. Saved to local config.\n`);
+          } else {
+            activeConfig = normalizeConfig({ ...activeConfig, model: fallbackModel });
+            if (!result.unavailable) {
+              output.write(`${colors.dim('No account API key is available; continuing with the manual/local key.')}\n`);
+            }
+          }
+          break;
+        }
+        case 'whoami': {
+          const auth = await loadAuth();
+          const identity = accountIdentity(auth?.account);
+          output.write(identity
+            ? `${colors.green('✓')} Signed in as ${colors.white(identity)}.\n`
+            : `${colors.dim('No account identity is available. Run /login to sign in.')}\n`);
+          break;
+        }
+        case 'logout': {
+          const removed = await clearAuth();
+          clearSessionApiKey();
+          activeConfig = normalizeConfig({ ...activeConfig, model: fallbackModel });
+          output.write(removed
+            ? `${colors.green('✓')} Signed out.\n`
+            : `${colors.dim('No account session was saved.')}\n`);
+          break;
+        }
         case 'setup':
           if (!input.isTTY || !output.isTTY) {
             output.write(`${colors.amber('⚠')} setup requires an interactive terminal. Run ${colors.green('luciano-code')} directly.\n`);

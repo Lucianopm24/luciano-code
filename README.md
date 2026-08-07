@@ -18,6 +18,7 @@ A terminal-first AI coding agent for developers who want a focused, premium comm
 - Folder trust protection to reduce prompt-injection risks from repository content.
 - Per-operation tool authorization, with optional approval for the rest of the current session.
 - Workspace restrictions that block unsafe paths, protected directories, secrets, private keys, and oversized files.
+- Optional account login with a manual device-authorization flow, plus the existing manual/API-key configuration path.
 - Local configuration with masked API keys and support for environment-based credentials.
 - Persistent local conversation memory stored under `~/.config/luciano-code/conversations/`, with configurable context limits and no tool-result transcripts saved.
 - An explicit NVIDIA data-sharing consent gate shown before the first request; NVIDIA may process submitted prompts, files, tool results, and responses according to its current policies, including model-training policies.
@@ -64,6 +65,8 @@ On the first launch, Luciano Code guides users through the initial setup. The se
 - Temperature
 - Streaming preference
 
+An account session is stored as a plain-text opaque token in `~/.config/luciano-code/auth.json`. On startup, and with `/sync`, the CLI validates it through the Convex backend at `https://wry-deer-1.convex.site/cli/key`; if the account has a saved NVIDIA key, that key and its model are synchronized into the local `~/.config/luciano-code/config.json` through the normal config-saving path. Set `CONVEX_SITE_URL` only for development or another backend environment. The browser URL is supplied by the login response and is never constructed by the CLI. If the account has no saved key, the CLI keeps the manual setup path available and does not overwrite the existing manual key.
+
 The `NVIDIA_API_KEY` environment variable can be used instead of storing a key locally:
 
 ```bash
@@ -97,6 +100,10 @@ The `/models` command still lists model IDs returned by the configured NVIDIA NI
 
 | Command | Description |
 | --- | --- |
+| `/login` | Sign in with a Luciano Code account in the browser using device authorization; status is checked only when you press Enter. |
+| `/sync` | Refresh the account API key and model for the current CLI session. |
+| `/whoami` | Show the saved account name, username, or email. |
+| `/logout` | Remove the local account session. |
 | `/setup` | Run or repeat the configuration wizard. |
 | `/key set` | Change the NVIDIA API key. |
 | `/model set` | Open the interactive model selector. |
