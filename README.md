@@ -13,7 +13,8 @@ A terminal-first AI coding agent for developers who want a focused, premium comm
 - Automatic recovery for NVIDIA NIM overload (`529`) responses, with an interactive fallback after 10 consecutive retries.
 - Interactive recovery for NVIDIA NIM rate-limit (`429`) responses.
 - Workspace tools for listing, reading, creating, and editing files.
-- Web search through SearXNG at `https://search.lucianopm.com` using its JSON API.
+- Web search through a configurable SearXNG JSON endpoint (default `https://search.lucianopm.com`).
+- Configurable maximum output tokens (default 16384, adjustable with `/tokens`) so file edits and longer answers are not truncated.
 - Global NVIDIA NIM request protection: 35 requests per rolling minute, followed by a 70-second cooldown and visible countdown.
 - Folder trust protection to reduce prompt-injection risks from repository content.
 - Per-operation tool authorization, with optional approval for the rest of the current session.
@@ -110,6 +111,8 @@ The `/models` command still lists model IDs returned by the configured NVIDIA NI
 | `/model set <model-id>` | Set a model ID directly. |
 | `/models` | List model IDs available from NVIDIA NIM. |
 | `/config` | Show the endpoint, model, preferences, and masked key status. |
+| `/config search set <url>` | Set the SearXNG JSON endpoint used by `web_search`. |
+| `/tokens` | Show, or with `set`, the max output tokens (range 256–65536), e.g. `/tokens set 32768`. |
 | `/trust` | Show whether the current folder is trusted. |
 | `/trust reset` | Revoke trust for the current folder. |
 | `/status` | Show workspace and provider status. |
@@ -154,7 +157,7 @@ The agent can use the following workspace tools:
 - `read_file` — read a UTF-8 text file.
 - `write_file` — create or replace a complete file.
 - `edit_file` — replace an exact text snippet in an existing file.
-- `web_search` — search the public web via SearXNG JSON at `https://search.lucianopm.com`.
+- `web_search` — search the public web via the configured SearXNG JSON endpoint (default `https://search.lucianopm.com`; change with `/config search set <url>`).
 
 A typical request might look like:
 
@@ -228,6 +231,13 @@ When streaming is enabled:
 - Native tool-call deltas are accumulated while content and progress continue to stream.
 - If a provider does not expose explicit reasoning, Luciano Code shows a `Thinking...` indicator instead; it does not invent or expose private chain-of-thought.
 - The `nothink` preference sends `chat_template_kwargs.enable_thinking=false` to compatible NVIDIA NIM deployments and suppresses provider reasoning output locally. Models that do not support this option may ignore it.
+
+During a session, the agent's tool instructions also include the current max output tokens and SearXNG endpoint, so it can explain how to change them if the user asks. Requesting `/tools` shows those instructions.
+
+## Output limits and the web search endpoint
+
+- Maximum output tokens default to 16384, up from the previous fixed 2048, so complete file edits and longer answers are no longer truncated mid-response. Lower or raise the limit with `/tokens set <number>`; values are clamped to 256–65536. If a response ends abruptly, it almost always hit this cap rather than a provider error.
+- The `web_search` tool uses a configurable SearXNG JSON endpoint. The default is `https://search.lucianopm.com`; point it at another SearXNG instance with `/config search set <url>`. Both settings are stored in the local configuration and shown by `/config` and `/status`.
 
 ## NVIDIA NIM endpoint
 

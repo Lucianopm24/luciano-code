@@ -119,7 +119,9 @@ export function renderHelp() {
     `${colors.green('/models')}    List available NVIDIA NIM models`,
     `${colors.green('/tools')}     Explain file tools and authorization`,
     `${colors.green('/nothink')}   Toggle model reasoning on or off`,
+    `${colors.green('/tokens')}    Show or set max output tokens`,
     `${colors.green('/config')}    Show current configuration`,
+    `${colors.green('/config search set')} <url>  Set the SearXNG web search endpoint`,
     `${colors.green('/trust')}     Show folder trust status`,
     `${colors.green('/trust reset')} Revoke trust for this folder`,
     `${colors.green('/status')}    Show workspace and provider status`,
@@ -149,6 +151,7 @@ export function renderStatus(config = normalizeConfig()) {
     `${colors.dim(symbols.bullet)} ${colors.slate(`Model: ${config.model}`)}`,
     `${colors.dim(symbols.bullet)} ${colors.slate(`Key: ${maskApiKey(getApiKey(runtime))}${runtime.keySource === 'environment' ? ' · environment override' : runtime.keySource === 'account' ? ' · account session' : ''}`)}`,
     `${colors.dim(symbols.bullet)} ${colors.slate(`Language: ${config.preferences.language} · stream: ${config.preferences.stream ? 'on' : 'off'} · no-think: ${config.preferences.noThink ? 'on' : 'off'}`)}`,
+    `${colors.dim(symbols.bullet)} ${colors.slate(`Max output tokens: ${config.preferences.maxTokens} · web search: ${config.preferences.searxngUrl}`)}`,
     `${colors.dim(symbols.bullet)} ${colors.slate('Tools: list/read/write/edit/command · authorization per operation or session')}`,
   ].join('\n');
 }
@@ -164,6 +167,8 @@ export function renderConfig(config = normalizeConfig()) {
     `${colors.dim('Stream')}    ${colors.white(config.preferences.stream ? 'enabled' : 'disabled')}`,
     `${colors.dim('No-think')}  ${colors.white(config.preferences.noThink ? 'enabled' : 'disabled')}`,
     `${colors.dim('Context')}   ${colors.white(`${config.preferences.contextMessages} messages`)}`,
+    `${colors.dim('Max tokens')} ${colors.white(config.preferences.maxTokens)}`,
+    `${colors.dim('Search')}    ${colors.slate(config.preferences.searxngUrl)}`,
     `${colors.dim('Consent')}   ${colors.white(config.nvidiaDataConsent || 'not decided')}`,
     '',
     colors.dim('Stored locally with restricted permissions.'),

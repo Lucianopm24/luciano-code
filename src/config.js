@@ -6,6 +6,10 @@ import { getSessionApiKey } from './auth.js';
 
 export const DEFAULT_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 export const DEFAULT_MODEL = 'deepseek-ai/deepseek-v4-flash';
+export const DEFAULT_SEARXNG_URL = 'https://search.lucianopm.com/search';
+export const DEFAULT_MAX_TOKENS = 16384;
+export const MAX_TOKENS_MIN = 256;
+export const MAX_TOKENS_MAX = 65536;
 export const CONFIG_DIR = path.join(os.homedir(), '.config', 'luciano-code');
 export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 
@@ -21,6 +25,8 @@ const DEFAULT_CONFIG = {
     stream: true,
     noThink: false,
     contextMessages: 24,
+    maxTokens: DEFAULT_MAX_TOKENS,
+    searxngUrl: DEFAULT_SEARXNG_URL,
   },
   trustedPaths: [],
   nvidiaDataConsent: null,
@@ -28,6 +34,24 @@ const DEFAULT_CONFIG = {
 
 function cleanString(value, fallback) {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+export function normalizeMaxTokens(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_MAX_TOKENS;
+  return Math.min(MAX_TOKENS_MAX, Math.max(MAX_TOKENS_MIN, Math.floor(parsed)));
+}
+
+function normalizeSearxngUrl(value) {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) return DEFAULT_SEARXNG_URL;
+  try {
+    const parsed = new URL(trimmed);
+    if (['http:', 'https:'].includes(parsed.protocol)) return trimmed.replace(/\/+$/, '');
+  } catch {
+    // Invalid or unsupported URLs fall back to the default endpoint.
+  }
+  return DEFAULT_SEARXNG_URL;
 }
 
 export function normalizeConfig(input = {}) {
@@ -52,6 +76,8 @@ export function normalizeConfig(input = {}) {
       contextMessages: Number.isFinite(Number(preferences.contextMessages))
         ? Math.max(1, Math.min(200, Math.floor(Number(preferences.contextMessages))))
         : 24,
+      maxTokens: normalizeMaxTokens(preferences.maxTokens),
+      searxngUrl: normalizeSearxngUrl(preferences.searxngUrl),
     },
     nvidiaDataConsent: ['accepted', 'declined'].includes(input.nvidiaDataConsent)
       ? input.nvidiaDataConsent

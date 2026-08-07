@@ -1,7 +1,7 @@
 import readline from 'node:readline';
 import { runDemo } from './demo.js';
 import { runPrompt, runWorkspaceAnalysis } from './agent.js';
-import { hasNvidiaDataConsent, loadConfig, normalizeConfig, saveConfig, setNvidiaDataConsent } from './config.js';
+import { hasNvidiaDataConsent, loadConfig, normalizeConfig, normalizeMaxTokens, saveConfig, setNvidiaDataConsent, MAX_TOKENS_MIN, MAX_TOKENS_MAX } from './config.js';
 import { renderConsentStatus } from './consent.js';
 import {
   clearCurrentConversation,
@@ -180,6 +180,36 @@ export function createCli({
             output.write(`${colors.green('✓')} No-think mode ${colors.white(mode === 'on' ? 'enabled' : 'disabled')}.\n`);
           }
           break;
+        case 'tokens':
+          {
+            const mode = parts[0]?.toLowerCase();
+            if (!mode || mode === 'status') {
+              output.write(`${colors.dim('Max output tokens:')} ${colors.white(activeConfig.preferences.maxTokens)} ${colors.dim(`(range ${MAX_TOKENS_MIN}–${MAX_TOKENS_MAX})`)}\n`);
+              output.write(`${colors.dim('Change with:')} ${colors.green('/tokens set <number>')}\n`);
+              break;
+            }
+            const rawValue = mode === 'set' ? parts[1] : mode;
+            const requested = Number(rawValue);
+            if (mode !== 'set' && !/^\d+$/.test(mode)) {
+              output.write(`${colors.dim('Usage:')} ${colors.green('/tokens set <number>')} · ${colors.green('/tokens status')}\n`);
+              break;
+            }
+            if (!Number.isFinite(requested) || requested <= 0) {
+              output.write(`${colors.amber('⚠')} Provide a positive number of tokens.\n`);
+              output.write(`${colors.dim('Usage:')} ${colors.green('/tokens set <number>')} · ${colors.green('/tokens status')}\n`);
+              break;
+            }
+            const clamped = normalizeMaxTokens(requested);
+            activeConfig = await saveConfig({
+              ...activeConfig,
+              preferences: { ...activeConfig.preferences, maxTokens: clamped },
+            });
+            const note = clamped !== Math.floor(requested)
+              ? ` ${colors.dim(`(clamped to range ${MAX_TOKENS_MIN}–${MAX_TOKENS_MAX})`)}`
+              : '';
+            output.write(`${colors.green('✓')} Max output tokens set to ${colors.white(clamped)}${note}.\n`);
+          }
+          break;
         case 'model':
           if (parts[0]?.toLowerCase() !== 'set') {
             output.write(`${colors.dim('Usage:')} ${colors.green('model set [<model-id>]')}\n`);
@@ -231,9 +261,42 @@ export function createCli({
             }
           }
           break;
-        case 'config':
+        case 'config': {
+          const sub = parts[0]?.toLowerCase();
+          if (sub === 'search') {
+            const action = parts[1]?.toLowerCase();
+            if (action !== 'set') {
+              output.write(`${colors.dim('Usage:')} ${colors.green('/config search set <searxng-url>')}\n`);
+              output.write(`${colors.dim('Current search endpoint:')} ${colors.white(activeConfig.preferences.searxngUrl)}\n`);
+              break;
+            }
+            const rawUrl = parts.slice(2).join(' ').trim().replace(/^["']|["']$/g, '').trim();
+            if (!rawUrl) {
+              output.write(`${colors.amber('⚠')} A SearXNG JSON URL is required, e.g. ${colors.green('/config search set https://example.com/search')}.\n`);
+              break;
+            }
+            let parsed;
+            try {
+              parsed = new URL(rawUrl);
+            } catch {
+              output.write(`${colors.amber('⚠')} That does not look like a valid URL.\n`);
+              break;
+            }
+            if (!['http:', 'https:'].includes(parsed.protocol)) {
+              output.write(`${colors.amber('⚠')} The URL must use http or https.\n`);
+              break;
+            }
+            const normalizedUrl = rawUrl.replace(/\/+$/, '');
+            activeConfig = await saveConfig({
+              ...activeConfig,
+              preferences: { ...activeConfig.preferences, searxngUrl: normalizedUrl },
+            });
+            output.write(`${colors.green('✓')} Web search endpoint set to ${colors.white(activeConfig.preferences.searxngUrl)}.\n`);
+            break;
+          }
           output.write(`\n${renderConfig(activeConfig)}\n`);
           break;
+        }
         case 'consent':
           if (!parts[0]) {
             output.write(`${renderConsentStatus(activeConfig)}\n`);
@@ -295,7 +358,7 @@ export function createCli({
           await showModels(activeConfig, output);
           break;
         case 'tools':
-          output.write(`\n${toolInstructions()}\n`);
+          output.write(`\n${toolInstructions(activeConfig)}\n`);
           output.write(`${colors.dim('Authorization:')} ${colors.green('y')} approve once · ${colors.green('a')} approve tools for this session · ${colors.green('n')} reject\n`);
           break;
         case 'trust':

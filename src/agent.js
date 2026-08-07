@@ -88,6 +88,7 @@ async function runAuthorizedTool(request, {
   spinner,
   toolResults,
   memoryBaseDir,
+  searxngUrl,
 }) {
   const executionRequest = request?.eventId || request?.callId
     ? request
@@ -105,6 +106,7 @@ async function runAuthorizedTool(request, {
     try {
       result = await executeTool(root, executionRequest, {
         authorized: true,
+        searxngUrl,
         onCommandResult: async (commandResult) => {
           try {
             await appendCommandExecution(
@@ -169,7 +171,7 @@ export async function runPrompt(
     config.preferences.noThink
       ? 'Do not spend effort on hidden reasoning. Give a direct, concise answer and proceed with tools when needed.'
       : 'Only expose reasoning/progress that the provider explicitly returns as reasoning_content or reasoning; never invent private chain-of-thought.',
-    toolInstructions(),
+    toolInstructions(activeConfig),
   ].join('\n\n');
   const memoryOptions = memoryBaseDir ? { baseDir: memoryBaseDir } : {};
   const conversation = await loadCurrentConversation(memoryOptions);
@@ -278,6 +280,7 @@ export async function runPrompt(
         spinner,
         toolResults,
         memoryBaseDir,
+        searxngUrl: activeConfig.preferences.searxngUrl,
       });
       messages.push({
         role: 'user',
@@ -413,6 +416,7 @@ export async function runPrompt(
             spinner,
             toolResults,
             memoryBaseDir,
+            searxngUrl: activeConfig.preferences.searxngUrl,
           });
           messages.push({
             role: 'tool',
@@ -428,6 +432,7 @@ export async function runPrompt(
           spinner,
           toolResults,
           memoryBaseDir,
+          searxngUrl: activeConfig.preferences.searxngUrl,
         });
         messages.push({ role: 'assistant', content: responseContent });
         messages.push({ role: 'user', content: toolResultMessage(textualRequest, result) });

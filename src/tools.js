@@ -14,8 +14,8 @@ import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
 import { colors } from './ui/colors.js';
+import { DEFAULT_MAX_TOKENS, DEFAULT_SEARXNG_URL } from './config.js';
 
-const SEARXNG_URL = 'https://search.lucianopm.com/search';
 const SEARCH_TIMEOUT_MS = 20_000;
 const MAX_SEARCH_RESULTS = 8;
 const MAX_FILE_BYTES = 1_000_000;
@@ -274,13 +274,13 @@ export function formatToolRequest(request) {
   return toolLabel({ ...request, arguments: { ...args, path: target } });
 }
 
-async function webSearch(args) {
+async function webSearch(args, { searxngUrl } = {}) {
   if (typeof args.query !== 'string' || !args.query.trim()) {
     throw new Error('web_search requires a non-empty query.');
   }
 
   const query = args.query.trim();
-  const url = new URL(SEARXNG_URL);
+  const url = new URL(searxngUrl || DEFAULT_SEARXNG_URL);
   url.searchParams.set('q', query);
   url.searchParams.set('format', 'json');
   url.searchParams.set('categories', typeof args.categories === 'string' && args.categories.trim() ? args.categories.trim() : 'general');
@@ -450,14 +450,14 @@ async function editWorkspaceFile(root, args) {
   return `Edited ${target.relativePath} (${occurrences} replacement${occurrences === 1 ? '' : 's'}).`;
 }
 
-export async function executeTool(root, request, { authorized = false, onCommandResult } = {}) {
+export async function executeTool(root, request, { authorized = false, searxngUrl, onCommandResult } = {}) {
   if (request?.tool === 'execute_command' && authorized !== true) {
     throw new Error('execute_command requires explicit user authorization.');
   }
   if (!TOOL_NAMES.has(request?.tool)) throw new Error('Unknown tool request.');
   const args = request.arguments || {};
   switch (request.tool) {
-    case 'web_search': return webSearch(args);
+    case 'web_search': return webSearch(args, { searxngUrl });
     case 'list_files': return listFiles(root, args);
     case 'read_file': return readWorkspaceFile(root, args);
     case 'write_file': return writeWorkspaceFile(root, args);
@@ -492,15 +492,27 @@ export function createToolAuthorizer({ input, output, readlineInterface, ask: as
   };
 }
 
-export function toolInstructions() {
+export function toolInstructions(config = {}) {
+  const preferences = config?.preferences || config || {};
+  const searxngUrl = typeof preferences.searxngUrl === 'string' && preferences.searxngUrl.trim()
+    ? preferences.searxngUrl.trim()
+    : DEFAULT_SEARXNG_URL;
+  const maxTokens = Number.isFinite(Number(preferences.maxTokens))
+    ? Number(preferences.maxTokens)
+    : DEFAULT_MAX_TOKENS;
   return [
     'Available local tools (the user must authorize every operation unless they choose session approval):',
     '- list_files: list a directory inside the workspace',
     '- read_file: read a text file inside the workspace',
     '- write_file: create or replace a file with complete content',
     '- edit_file: replace an exact snippet in an existing file',
-    '- web_search: search the public web through SearXNG at https://search.lucianopm.com',
+    `- web_search: search the public web through SearXNG at ${searxngUrl}`,
     '- execute_command: run one real shell command in the trusted workspace; it always requires explicit authorization',
+    '',
+    'Session settings the user can change at runtime (mention these when the user asks how to tune the agent):',
+    `- Maximum output tokens this session: ${maxTokens}. If a response is cut short, this limit is the cause; the user can raise it with /tokens (for example \`/tokens set 32768\`).`,
+    `- Web search endpoint: ${searxngUrl}. The user can change it with \`/config search set <searxng-url>\`.`,
+    '',
     'Models that support native OpenAI tool calls may use them. Otherwise request a tool as JSON, preferably with no surrounding prose:',
     '{"tool":"read_file","arguments":{"path":"src/index.js"}}',
     'After a tool result, continue reasoning. Never invent a tool result. Never request paths outside the workspace.',
