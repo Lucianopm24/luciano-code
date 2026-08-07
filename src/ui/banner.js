@@ -117,6 +117,10 @@ export function renderHelp() {
     `${colors.green('/key set')}  Replace the NVIDIA API key`,
     `${colors.green('/model set')} Choose or change the active NIM model`,
     `${colors.green('/models')}    List available NVIDIA NIM models`,
+    `${colors.green('/cloud repos')}    List connected Cloud repositories`,
+    `${colors.green('/cloud threads')} <repo>  List Cloud sessions for a repository`,
+    `${colors.green('/cloud continue')} <repo>  Continue a Cloud session locally`,
+    `${colors.green('/cloud use')} <repo>       Use a Cloud session with web sync`,
     `${colors.green('/tools')}     Explain file tools and authorization`,
     `${colors.green('/nothink')}   Toggle model reasoning on or off`,
     `${colors.green('/tokens')}    Show or set max output tokens`,
@@ -136,7 +140,7 @@ export function renderHelp() {
     `${colors.green('/help')}      Show available commands`,
     `${colors.green('/exit')}      Close Luciano Code AI`,
     '',
-    `${colors.dim('Tip:')} use ${colors.green('/model set')} to choose a recommended DeepSeek model or custom model ID.`,
+    `${colors.dim('Tip:')} use ${colors.green('/model set')} to choose GLM 5.2, MiniMax M3, or a custom model ID.`,
   ], { title: 'Commands', width: 62, tone: 'green' });
 }
 

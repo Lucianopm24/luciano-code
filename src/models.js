@@ -30,27 +30,34 @@ export const PREDEFINED_MODELS = [
     description: 'Mixture-of-experts model with strong open-model performance.',
   },
   {
-    id: 'deepseek-ai/deepseek-v4-flash',
-    name: 'DeepSeek V4 Flash',
-    provider: 'DeepSeek',
-    description: 'Fast DeepSeek V4 option for responsive coding workflows.',
-    experimental: true,
+    id: 'z-ai/glm-5.2',
+    name: 'GLM 5.2',
+    provider: 'Z.ai',
+    description: 'Strong general-purpose model for coding and reasoning via NVIDIA NIM.',
   },
   {
-    id: 'deepseek-ai/deepseek-v4-pro',
-    name: 'DeepSeek V4 Pro',
-    provider: 'DeepSeek',
-    description: 'Higher-capability DeepSeek V4 option for complex reasoning.',
-    experimental: true,
+    id: 'minimaxai/minimax-m3',
+    name: 'MiniMax M3',
+    provider: 'MiniMax',
+    description: 'Fast, capable model for coding workflows via NVIDIA NIM.',
   },
 ];
 
-// Keep the complete catalog available for compatibility and future testing, but
-// only expose verified recommendations in the interactive selector for now.
-export const RECOMMENDED_MODELS = PREDEFINED_MODELS.filter((model) => [
+export const DEPRECATED_MODEL_IDS = new Set([
   'deepseek-ai/deepseek-v4-flash',
   'deepseek-ai/deepseek-v4-pro',
+]);
+
+export const RECOMMENDED_MODELS = PREDEFINED_MODELS.filter((model) => [
+  'z-ai/glm-5.2',
+  'minimaxai/minimax-m3',
 ].includes(model.id));
+
+export const DEFAULT_REPLACEMENT_MODEL = RECOMMENDED_MODELS[0].id;
+
+export function isDeprecatedModel(modelId) {
+  return DEPRECATED_MODEL_IDS.has(modelId);
+}
 
 export const CUSTOM_MODEL_INDEX = RECOMMENDED_MODELS.length + 1;
 

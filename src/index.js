@@ -29,7 +29,7 @@ export async function main() {
     return;
   }
 
-  const { config, exists } = await loadConfig();
+  const { config, exists, migratedFromModel } = await loadConfig();
   const shouldCheckTrust = !args.has('--help') && !args.has('-h')
     && !args.has('--version') && !args.has('-v');
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
@@ -58,11 +58,20 @@ export async function main() {
     }
 
     let activeConfig = consentResult.config;
+    if (migratedFromModel) {
+      activeConfig = await saveConfig(activeConfig);
+      output.write(`Your previous model is no longer available, switched to ${activeConfig.model}\n`);
+    }
     const manualModel = activeConfig.model;
     const accountSession = await initializeAccountSession({ output });
+    const syncedDeprecatedModel = accountSession.config?.model === 'deepseek-ai/deepseek-v4-flash'
+      || accountSession.config?.model === 'deepseek-ai/deepseek-v4-pro';
     const shouldSetup = args.has('--setup') || (!exists && interactive && !accountSession.active);
     if (accountSession.config) {
       activeConfig = await saveConfig(normalizeConfig({ ...activeConfig, ...accountSession.config }));
+      if (syncedDeprecatedModel) {
+        output.write(`Your previous model is no longer available, switched to ${activeConfig.model}\n`);
+      }
     }
 
     if (shouldSetup) {

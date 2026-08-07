@@ -1,7 +1,9 @@
 import readline from 'node:readline';
 import { runDemo } from './demo.js';
 import { runPrompt, runWorkspaceAnalysis } from './agent.js';
+import { CloudClient, CLOUD_SESSION_EXPIRED_MESSAGE, CLOUD_THREAD_NOT_FOUND_MESSAGE, findCloudRepo, formatCloudUpdatedAt, validateCloudRepo } from './cloud.js';
 import { hasNvidiaDataConsent, loadConfig, normalizeConfig, normalizeMaxTokens, saveConfig, setNvidiaDataConsent, MAX_TOKENS_MIN, MAX_TOKENS_MAX } from './config.js';
+import { isDeprecatedModel } from './models.js';
 import { renderConsentStatus } from './consent.js';
 import {
   clearCurrentConversation,
@@ -14,6 +16,7 @@ import { NvidiaNimClient } from './nvidia.js';
 import { renderConfig, renderHelp, renderStatus } from './ui/banner.js';
 import { renderTrustStatus, revokeCurrentFolderTrust } from './trust.js';
 import { colors } from './ui/colors.js';
+import { renderMarkdown } from './ui/markdown.js';
 import { toolInstructions } from './tools.js';
 import { createTerminalRenderer, getTerminalStream } from './ui/terminal-renderer.js';
 import {
@@ -45,6 +48,49 @@ function clearTerminal(stream) {
   stream.clear?.();
 }
 
+function cloudMessageContent(message) {
+  if (typeof message === 'string') return message;
+  if (typeof message?.content === 'string') return message.content;
+  if (Array.isArray(message?.content)) {
+    return message.content.map((part) => typeof part === 'string' ? part : part?.text || '').join('');
+  }
+  return '';
+}
+
+function renderCloudHistory(thread, stream) {
+  const messages = Array.isArray(thread?.uiMessages) ? thread.uiMessages : [];
+  if (!messages.length) {
+    stream.write(`${colors.dim('Cloud session has no visible messages yet.')}\n`);
+    return;
+  }
+  stream.write(`\n${colors.bold('Cloud session history')}\n`);
+  for (const message of messages) {
+    const role = message?.role === 'user' ? 'You' : message?.role === 'assistant' ? 'Assistant' : message?.role || 'Message';
+    const content = cloudMessageContent(message);
+    if (!content) continue;
+    const rendered = role === 'Assistant' ? renderMarkdown(content) : content;
+    stream.write(`\n${colors.brightGreen(role)} ${colors.dim('›')}\n${rendered}\n`);
+  }
+  stream.write('\n');
+}
+
+function cloudThreadLabel(thread, index) {
+  return `${index + 1}. ${thread.title} · ${thread.status} · ${formatCloudUpdatedAt(thread.updatedAt)} · ID: ${thread.threadId}`;
+}
+
+export async function chooseCloudThread(threads, ask, output) {
+  if (threads.length === 1) return threads[0];
+  output.write(`\n${colors.bold('Choose a Cloud session')}\n`);
+  threads.forEach((thread, index) => output.write(`${cloudThreadLabel(thread, index)}\n`));
+  const answer = (await ask(`Session ${colors.dim(`[1-${threads.length}]`)}: `)).trim();
+  const choice = Number(answer);
+  if (!Number.isInteger(choice) || choice < 1 || choice > threads.length) {
+    output.write(`${colors.amber('⚠')} Invalid Cloud session choice.\n`);
+    return null;
+  }
+  return threads[choice - 1];
+}
+
 export function createCli({
   input = process.stdin,
   output = process.stdout,
@@ -52,6 +98,7 @@ export function createCli({
   memoryBaseDir,
   manualModel,
   readlineInterface: existingInterface,
+  cloudClient: injectedCloudClient,
 } = {}) {
   output = createTerminalRenderer(output);
   let readlineInterface;
@@ -59,6 +106,82 @@ export function createCli({
   let activeConfig = normalizeConfig(config);
   const fallbackModel = manualModel || activeConfig.model;
   let restarting = false;
+  const cloudClient = injectedCloudClient || new CloudClient();
+  let activeCloudSession = null;
+
+  const handleCloudError = async (error, { threadRequest = false } = {}) => {
+    if (error?.status === 401 || error?.sessionExpired || error?.message === CLOUD_SESSION_EXPIRED_MESSAGE) {
+      output.write(`${colors.amber('⚠')} ${CLOUD_SESSION_EXPIRED_MESSAGE}\n`);
+      activeCloudSession = null;
+      return;
+    }
+    if (error?.status === 404 && threadRequest) {
+      output.write(`${colors.amber('⚠')} ${CLOUD_THREAD_NOT_FOUND_MESSAGE}\n`);
+      activeCloudSession = null;
+      return;
+    }
+    output.write(`${colors.red('✗')} ${colors.slate(error.message)}\n`);
+  };
+
+  const loadCloudSession = async (repo, requestedThreadId, hybrid) => {
+    activeCloudSession = null;
+    const validRepo = validateCloudRepo(repo);
+    let thread;
+    let selectedThreadId = requestedThreadId;
+    let syncThreadId = requestedThreadId;
+    if (requestedThreadId) {
+      try {
+        thread = await cloudClient.getThread(validRepo, requestedThreadId);
+      } catch (error) {
+        // Some backend deployments expose 32-character session IDs while the
+        // direct lookup still recognizes only the legacy 24-character shape.
+        // The API documents title lookup as a fallback, so resolve the exact
+        // listed session and retry with its authoritative title.
+        if (error?.status !== 404 || requestedThreadId.length <= 24) throw error;
+        const listedThreads = await cloudClient.listThreads(validRepo);
+        const listedThread = listedThreads.find((item) => item.threadId === requestedThreadId);
+        if (!listedThread?.title) throw error;
+        syncThreadId = listedThread.title;
+        thread = await cloudClient.getThread(validRepo, syncThreadId);
+      }
+    } else {
+      const threads = await cloudClient.listThreads(validRepo);
+      if (!threads.length) {
+        output.write(`No Cloud sessions found for ${validRepo}. Use /cloud use to start one.\n`);
+        return false;
+      }
+      const selected = await chooseCloudThread(threads, ask, output);
+      if (!selected) return false;
+      selectedThreadId = selected.threadId;
+      syncThreadId = selectedThreadId;
+      thread = await cloudClient.getThread(validRepo, selectedThreadId);
+    }
+
+    activeCloudSession = {
+      repo: validRepo,
+      threadId: syncThreadId || thread.threadId || selectedThreadId || '',
+      hybrid,
+      llmMessages: Array.isArray(thread.llmMessages)
+        ? thread.llmMessages.map((message) => ({ ...message }))
+        : [],
+    };
+    renderCloudHistory(thread, output);
+    output.write(`${colors.green('✓')} Cloud session loaded in ${hybrid ? 'hybrid' : 'local'} mode. Changes stay on this machine.\n`);
+    return true;
+  };
+
+  const resolveCloudRepo = async (repo) => {
+    const validRepo = validateCloudRepo(repo);
+    const repos = await cloudClient.listRepos();
+    const match = findCloudRepo(repos, validRepo);
+    if (!match) {
+      output.write(`${colors.amber('⚠')} ${validRepo} is not connected. Connect it first from code.lucianopm.com/cloud.\n`);
+      return null;
+    }
+    // The API accepts short names, but the documented canonical identifier is
+    // fullName. Resolve it once so every Cloud command queries the same repo.
+    return match.fullName || match.repo || validRepo;
+  };
 
   const handleCommand = async (rawInput) => {
     const rawText = String(rawInput ?? '');
@@ -71,6 +194,20 @@ export function createCli({
         readlineInterface,
         ask,
         memoryBaseDir,
+        cloudLlmMessages: activeCloudSession?.llmMessages,
+        onTurnComplete: activeCloudSession
+          ? async ({ messages, llmMessages = [] }) => {
+            if (llmMessages.length) activeCloudSession.llmMessages.push(...llmMessages);
+            else activeCloudSession.llmMessages.push(...messages);
+            if (activeCloudSession.hybrid) {
+              await cloudClient.appendMessages(
+                activeCloudSession.repo,
+                activeCloudSession.threadId,
+                messages,
+              );
+            }
+          }
+          : undefined,
       });
       return;
     }
@@ -104,13 +241,101 @@ export function createCli({
             break;
           }
           if (result.config) {
+            const syncedDeprecatedModel = isDeprecatedModel(result.config.model);
             activeConfig = await saveConfig(normalizeConfig({ ...activeConfig, ...result.config }));
-            output.write(`${colors.green('✓')} API key synchronized from your account${result.config.model ? ` · model ${colors.white(result.config.model)}` : ''}. Saved to local config.\n`);
+            if (syncedDeprecatedModel) {
+              output.write(`Your previous model is no longer available, switched to ${activeConfig.model}\n`);
+            }
+            output.write(`${colors.green('✓')} API key synchronized from your account${result.config.model ? ` · model ${colors.white(activeConfig.model)}` : ''}. Saved to local config.\n`);
           } else {
             activeConfig = normalizeConfig({ ...activeConfig, model: fallbackModel });
             if (!result.unavailable) {
               output.write(`${colors.dim('No account API key is available; continuing with the manual/local key.')}\n`);
             }
+          }
+          break;
+        }
+        case 'cloud': {
+          const action = parts[0]?.toLowerCase();
+          if (action === 'repos') {
+            if (parts.length > 1) {
+              output.write(`${colors.dim('Usage:')} ${colors.green('/cloud repos')}\n`);
+              break;
+            }
+            try {
+              const repos = await cloudClient.listRepos();
+              if (!repos.length) {
+                output.write(`${colors.dim('No Cloud repositories are connected.')}\n`);
+                break;
+              }
+              output.write(`\n${colors.bold('Connected Cloud repositories')}\n`);
+              for (const item of repos) output.write(`${colors.green('·')} ${colors.white(item.fullName || item.repo)}\n`);
+            } catch (error) {
+              await handleCloudError(error);
+            }
+            break;
+          }
+
+          const repo = parts[1];
+          if (action === 'threads') {
+            if (!repo || parts.length > 2) {
+              output.write(`${colors.dim('Usage:')} ${colors.green('/cloud threads <repo>')}\n`);
+              break;
+            }
+            try {
+              const canonicalRepo = await resolveCloudRepo(repo);
+              if (!canonicalRepo) break;
+              const threads = await cloudClient.listThreads(canonicalRepo);
+              if (!threads.length) {
+                output.write(`No Cloud sessions found for ${canonicalRepo}.\n`);
+                break;
+              }
+              output.write(`\n${colors.bold(`Cloud sessions for ${canonicalRepo}`)}\n`);
+              threads.forEach((thread, index) => output.write(`${cloudThreadLabel(thread, index)}\n`));
+            } catch (error) {
+              await handleCloudError(error);
+            }
+            break;
+          }
+
+          if (!['continue', 'use'].includes(action)) {
+            output.write(`${colors.dim('Usage:')} ${colors.green('/cloud repos')} · ${colors.green('/cloud threads <repo>')} · ${colors.green('/cloud continue <repo>')} · ${colors.green('/cloud use <repo> [t <threadId>]')}\n`);
+            break;
+          }
+          if (!repo) {
+            output.write(`${colors.amber('⚠')} A repository name is required.\n`);
+            break;
+          }
+          try {
+            const validRepo = validateCloudRepo(repo);
+            let threadId;
+            let hybrid = action === 'use';
+            let sessionRepo = validRepo;
+            const canonicalRepo = await resolveCloudRepo(validRepo);
+            if (!canonicalRepo) break;
+            sessionRepo = canonicalRepo;
+            if (action === 'use') {
+              if (parts[2]?.toLowerCase() === 't') {
+                threadId = parts[3];
+                if (parts.length > 4) {
+                  output.write(`${colors.amber('⚠')} Usage: ${colors.green('/cloud use <repo> [t <threadId>]')}\n`);
+                  break;
+                }
+                if (parts.length === 3) {
+                  // `/cloud use repo t` means list and choose; never invent an ID.
+                  threadId = undefined;
+                }
+              } else if (parts.length > 2) {
+                output.write(`${colors.amber('⚠')} Usage: ${colors.green('/cloud use <repo> [t <threadId>]')}\n`);
+                break;
+              }
+            } else if (parts.length > 2) {
+              output.write(`${colors.amber('⚠')} Usage: ${colors.green('/cloud continue <repo>')}\n`);
+              break;
+            }
+            await loadCloudSession(sessionRepo, threadId, hybrid);
+          } catch (error) {
+            await handleCloudError(error, { threadRequest: true });
           }
           break;
         }

@@ -3,9 +3,10 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { getSessionApiKey } from './auth.js';
+import { DEFAULT_REPLACEMENT_MODEL, isDeprecatedModel } from './models.js';
 
 export const DEFAULT_BASE_URL = 'https://integrate.api.nvidia.com/v1';
-export const DEFAULT_MODEL = 'deepseek-ai/deepseek-v4-flash';
+export const DEFAULT_MODEL = DEFAULT_REPLACEMENT_MODEL;
 export const DEFAULT_SEARXNG_URL = 'https://search.lucianopm.com/search';
 export const DEFAULT_MAX_TOKENS = 16384;
 export const MAX_TOKENS_MIN = 256;
@@ -54,6 +55,11 @@ function normalizeSearxngUrl(value) {
   return DEFAULT_SEARXNG_URL;
 }
 
+export function normalizeModelId(modelId) {
+  const value = cleanString(modelId, DEFAULT_MODEL);
+  return isDeprecatedModel(value) ? DEFAULT_MODEL : value;
+}
+
 export function normalizeConfig(input = {}) {
   const preferences = input.preferences ?? {};
   const temperature = Number(preferences.temperature);
@@ -64,7 +70,7 @@ export function normalizeConfig(input = {}) {
     version: 2,
     provider: 'nvidia-nim',
     baseUrl: cleanString(input.baseUrl, DEFAULT_BASE_URL).replace(/\/+$/, ''),
-    model: cleanString(input.model, DEFAULT_MODEL),
+    model: normalizeModelId(input.model),
     apiKey: typeof input.apiKey === 'string' ? input.apiKey.trim() : '',
     preferences: {
       ...DEFAULT_CONFIG.preferences,
@@ -91,7 +97,9 @@ export function normalizeConfig(input = {}) {
 export async function loadConfig() {
   try {
     const raw = await readFile(CONFIG_PATH, 'utf8');
-    return { config: normalizeConfig(JSON.parse(raw)), exists: true };
+    const parsed = JSON.parse(raw);
+    const migratedFromModel = isDeprecatedModel(parsed?.model) ? parsed.model : null;
+    return { config: normalizeConfig(parsed), exists: true, migratedFromModel };
   } catch (error) {
     if (error.code !== 'ENOENT') {
       throw new Error(`No se pudo leer ${CONFIG_PATH}: ${error.message}`);

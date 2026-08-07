@@ -70,7 +70,7 @@ export function createSecretReader({ input, output }) {
 
 export async function chooseModel(readlineInterface, output, currentModel = DEFAULT_MODEL) {
   output.write(`\n${colors.bold('Choose your NVIDIA NIM model')}\n`);
-  output.write(`${colors.dim('Recommended models are currently limited to tested DeepSeek options. Choose Custom for another catalog ID.')}\n\n`);
+  output.write(`${colors.dim('Recommended NVIDIA NIM models: GLM 5.2 and MiniMax M3. Choose Custom for another catalog ID.')}\n\n`);
   output.write(`${renderModelChoices(currentModel).join('\n')}\n\n`);
 
   const defaultChoice = defaultModelChoice(currentModel);

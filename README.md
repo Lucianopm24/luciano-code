@@ -7,7 +7,8 @@ A terminal-first AI coding agent for developers who want a focused, premium comm
 - Responsive terminal UI with Unicode panels, status indicators, spinners, and Markdown rendering.
 - Adaptive banners that preserve the full design on large terminals, use compact boxes on narrow terminals, and fall back to plain text on very small screens.
 - NVIDIA NIM integration through its OpenAI-compatible chat completions API.
-- Recommended model selection focused on tested DeepSeek presets, with support for custom model IDs.
+- Recommended model selection with GLM 5.2 and MiniMax M3 via NVIDIA NIM, with support for custom model IDs.
+- Cloud session commands that load web history into the local agent, with optional hybrid synchronization and local file changes.
 - Explicit streaming of provider-supplied reasoning/progress in gray and assistant responses as they arrive, without duplicating accumulated SSE chunks.
 - Optional `nothink` mode for direct responses when the selected model supports disabling reasoning.
 - Automatic recovery for NVIDIA NIM overload (`529`) responses, with an interactive fallback after 10 consecutive retries.
@@ -61,7 +62,7 @@ Create an NVIDIA API key at:
 On the first launch, Luciano Code guides users through the initial setup. The setup flow can configure:
 
 - NVIDIA API key
-- Recommended DeepSeek model preset or custom model ID
+- Recommended GLM 5.2 or MiniMax M3 model preset, or a custom model ID
 - Response language (`es` or `en`)
 - Temperature
 - Streaming preference
@@ -85,15 +86,15 @@ If the folder is not trusted, agent execution and workspace tools remain disable
 
 ## Model selection
 
-The interactive selector currently shows only the recommended, tested model options:
+The interactive selector currently shows the recommended model options:
 
-1. **DeepSeek V4 Flash** — `deepseek-ai/deepseek-v4-flash`
-2. **DeepSeek V4 Pro** — `deepseek-ai/deepseek-v4-pro`
+1. **GLM 5.2** — `z-ai/glm-5.2`
+2. **MiniMax M3** — `minimaxai/minimax-m3`
 3. **Custom model ID**
 
 The custom option accepts any NVIDIA NIM model ID, including models that are not currently shown as recommendations. The internal model catalog remains multi-provider and can be expanded as additional models are tested; hiding a preset from the selector does not remove compatibility with existing configurations or direct `/model set <model-id>` usage.
 
-New configurations default to **DeepSeek V4 Flash**. Existing configurations keep their current model. If an existing model is no longer a visible recommendation, the selector marks it as the current custom choice until you select a recommended model or enter another custom ID.
+New configurations default to **GLM 5.2**. Existing configurations using deprecated DeepSeek V4 Flash or Pro are migrated to GLM 5.2 with an explanatory notice; the same notice is shown when `/sync` returns a deprecated model.
 
 The `/models` command still lists model IDs returned by the configured NVIDIA NIM endpoint. Availability and runtime behavior can vary by NVIDIA catalog, account, region, or endpoint. A 404 response generally means that the selected model ID is not available exactly as configured.
 
@@ -110,6 +111,8 @@ The `/models` command still lists model IDs returned by the configured NVIDIA NI
 | `/model set` | Open the interactive model selector. |
 | `/model set <model-id>` | Set a model ID directly. |
 | `/models` | List model IDs available from NVIDIA NIM. |
+| `/cloud continue <repo>` | Load a Cloud session locally; no turns are synchronized back to the web. |
+| `/cloud use <repo> [t <threadId>]` | Load a Cloud session and synchronize each user/assistant turn while files stay local. |
 | `/config` | Show the endpoint, model, preferences, and masked key status. |
 | `/config search set <url>` | Set the SearXNG JSON endpoint used by `web_search`. |
 | `/tokens` | Show, or with `set`, the max output tokens (range 256–65536), e.g. `/tokens set 32768`. |

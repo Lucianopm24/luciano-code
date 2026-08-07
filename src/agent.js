@@ -46,7 +46,13 @@ function renderRateLimitProtection(stream, error) {
 }
 
 function isToolSchemaUnsupported(error) {
-  return error?.status === 400 || error?.status === 422;
+  if (![400, 422].includes(error?.status)) return false;
+  const message = String(error?.message || '').toLowerCase();
+  return [
+    /(?:tool|function)s?\s+(?:are\s+)?(?:not supported|unsupported|not available|not allowed)/,
+    /(?:does not|doesn't)\s+(?:expose|support)\s+(?:native\s+)?(?:tool|function)s?/,
+    /native\s+(?:tool|function)s?\s+(?:are\s+)?(?:not supported|unsupported|not available)/,
+  ].some((pattern) => pattern.test(message));
 }
 
 const API_KEY_URL = 'https://build.nvidia.com/settings/api-keys';
@@ -142,6 +148,8 @@ export async function runPrompt(
     ask,
     initialToolRequests = [],
     onInitialToolResult,
+    onTurnComplete,
+    cloudLlmMessages,
     memoryBaseDir,
     enableTools = true,
   } = {},
@@ -180,13 +188,43 @@ export async function runPrompt(
   }
   await appendConversationMessage({ role: 'user', content: prompt }, memoryOptions);
   const storedConversation = await loadCurrentConversation(memoryOptions);
-  const messages = [
-    { role: 'system', content: systemContent },
-    ...selectContextMessages(
-      storedConversation.messages.filter((message) => message.role !== 'system'),
-      activeConfig.preferences.contextMessages,
-    ).map(({ role, content }) => ({ role, content })),
-  ];
+  const cloudMessages = Array.isArray(cloudLlmMessages)
+    ? cloudLlmMessages.filter((message) => message && typeof message === 'object' && typeof message.role === 'string')
+      .map((message) => {
+        const normalized = { ...message };
+        if (!normalized.tool_call_id && normalized.toolCallId) normalized.tool_call_id = normalized.toolCallId;
+        if (!normalized.tool_calls && normalized.toolCalls) {
+          if (Array.isArray(normalized.toolCalls)) {
+            normalized.tool_calls = normalized.toolCalls;
+          } else if (typeof normalized.toolCalls === 'string') {
+            try {
+              const parsedToolCalls = JSON.parse(normalized.toolCalls);
+              if (Array.isArray(parsedToolCalls)) normalized.tool_calls = parsedToolCalls;
+            } catch {
+              // Leave malformed provider history untouched so the API error is visible.
+            }
+          }
+        }
+        delete normalized.toolCallId;
+        if (normalized.tool_calls) delete normalized.toolCalls;
+        return normalized;
+      })
+    : null;
+  const cloudSystemOffset = cloudMessages?.length && !cloudMessages.some((message) => message.role === 'system') ? 1 : 0;
+  const cloudTurnStart = cloudMessages?.length ? cloudMessages.length + cloudSystemOffset : 0;
+  const messages = cloudMessages?.length
+    ? [
+      ...(cloudMessages.some((message) => message.role === 'system') ? [] : [{ role: 'system', content: systemContent }]),
+      ...cloudMessages,
+      { role: 'user', content: prompt },
+    ]
+    : [
+      { role: 'system', content: systemContent },
+      ...selectContextMessages(
+        storedConversation.messages.filter((message) => message.role !== 'system'),
+        activeConfig.preferences.contextMessages,
+      ).map(({ role, content }) => ({ role, content })),
+    ];
   const spinner = new Spinner(stream);
   const root = workspaceRoot();
   const authorizeTool = createToolAuthorizer({
@@ -394,6 +432,16 @@ export async function runPrompt(
         }
         if (responseContent) {
           await appendConversationMessage({ role: 'assistant', content: responseContent }, memoryOptions);
+          if (cloudMessages?.length) messages.push({ role: 'assistant', content: responseContent });
+          if (onTurnComplete) {
+            await onTurnComplete({
+              messages: [
+                { role: 'user', content: prompt },
+                { role: 'assistant', content: responseContent },
+              ],
+              llmMessages: cloudMessages?.length ? messages.slice(cloudTurnStart) : [],
+            });
+          }
           stream.write(`\n${formatUsageSummary(totalResponseTokens, Date.now() - responseStartedAt)}\n`);
         }
         return;
