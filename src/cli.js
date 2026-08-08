@@ -1,9 +1,8 @@
 import readline from 'node:readline';
 import { runDemo } from './demo.js';
-import { runPrompt, runWorkspaceAnalysis } from './agent.js';
+import { buildSystemPrompt, runPrompt, runWorkspaceAnalysis } from './agent.js';
 import { CloudClient, CLOUD_SESSION_EXPIRED_MESSAGE, CLOUD_THREAD_NOT_FOUND_MESSAGE, findCloudRepo, formatCloudUpdatedAt, validateCloudRepo } from './cloud.js';
 import { hasNvidiaDataConsent, loadConfig, normalizeConfig, normalizeMaxTokens, saveConfig, setNvidiaDataConsent, MAX_TOKENS_MIN, MAX_TOKENS_MAX } from './config.js';
-import { isDeprecatedModel } from './models.js';
 import { renderConsentStatus } from './consent.js';
 import {
   clearCurrentConversation,
@@ -22,14 +21,50 @@ import { createTerminalRenderer, getTerminalStream } from './ui/terminal-rendere
 import {
   accountIdentity,
   clearAuth,
+  setSessionApiKey,
+  syncAccountSettings,
+  updateAccountConfig,
+  updateAccountKey,
+  updateAccountModel,
+  updateAccountSystemPrompt,
   clearSessionApiKey,
   loadAuth,
   runLoginFlow,
-  syncAccountSession,
 } from './auth.js';
+import { setSystemPrompt } from './memory.js';
 
 const PROMPT = `${colors.green('You')} ${colors.dim('>')} `;
 const ACCEPTED = new Set(['y', 'yes', 's', 'si', 'sí']);
+
+function comparableJson(value) {
+  return JSON.stringify(value);
+}
+
+function parseConfigBlob(blob) {
+  if (typeof blob !== 'string') return null;
+  try {
+    return JSON.parse(blob);
+  } catch {
+    return undefined;
+  }
+}
+
+function accountPromptValue(payload) {
+  return typeof payload?.prompt === 'string' && payload.prompt.length ? payload.prompt : null;
+}
+
+function localConfigBlob(config) {
+  return JSON.stringify(config);
+}
+
+async function askSyncResolution(ask, label) {
+  const answer = (await ask(
+    `Local and account ${label} differ.\n1) Pull from account (overwrite local)\n2) Push local to account (overwrite account)\n> `,
+  )).trim();
+  if (answer === '1') return 'pull';
+  if (answer === '2') return 'push';
+  return null;
+}
 
 export function parseCommandInput(rawInput) {
   const rawText = String(rawInput ?? '');
@@ -97,6 +132,8 @@ export function createCli({
   config = normalizeConfig(),
   memoryBaseDir,
   manualModel,
+  configExists = true,
+  accountSyncOptions = {},
   readlineInterface: existingInterface,
   cloudClient: injectedCloudClient,
 } = {}) {
@@ -104,6 +141,7 @@ export function createCli({
   let readlineInterface;
   let commandQueue = Promise.resolve();
   let activeConfig = normalizeConfig(config);
+  let localConfigExists = configExists;
   const fallbackModel = manualModel || activeConfig.model;
   let restarting = false;
   const cloudClient = injectedCloudClient || new CloudClient();
@@ -232,7 +270,7 @@ export function createCli({
           await runLoginFlow({ ask, output });
           break;
         case 'sync': {
-          const result = await syncAccountSession({ output });
+          const result = await syncAccountSettings({ output, ...accountSyncOptions });
           if (!result.authenticated) {
             activeConfig = normalizeConfig({ ...activeConfig, model: fallbackModel });
             if (!result.expired) {
@@ -240,18 +278,96 @@ export function createCli({
             }
             break;
           }
-          if (result.config) {
-            const syncedDeprecatedModel = isDeprecatedModel(result.config.model);
-            activeConfig = await saveConfig(normalizeConfig({ ...activeConfig, ...result.config }));
-            if (syncedDeprecatedModel) {
-              output.write(`Your previous model is no longer available, switched to ${activeConfig.model}\n`);
+          if (!result.settings) break;
+
+          const { key: accountKey, config: accountConfig, systemPrompt: accountSystemPrompt } = result.settings;
+          const localSnapshot = normalizeConfig(activeConfig);
+          const hadLocalConfig = localConfigExists;
+          const localKey = hadLocalConfig && localSnapshot.apiKey ? localSnapshot.apiKey : null;
+          const accountApiKey = typeof accountKey?.apiKey === 'string' && accountKey.apiKey.trim()
+            ? accountKey.apiKey.trim()
+            : null;
+          const localModel = hadLocalConfig && localSnapshot.model ? localSnapshot.model : null;
+          const accountModel = typeof accountKey?.model === 'string' && accountKey.model.trim()
+            ? accountKey.model.trim()
+            : null;
+          const keyModelDiffer = localKey !== accountApiKey || localModel !== accountModel;
+
+          if (keyModelDiffer) {
+            let resolution = null;
+            if (!localKey && !localModel && (accountApiKey || accountModel)) resolution = 'pull';
+            else if (!accountApiKey && !accountModel && (localKey || localModel)) resolution = 'push';
+            else resolution = await askSyncResolution(ask, 'key');
+
+            if (resolution === 'pull') {
+              activeConfig = await saveConfig({
+                ...activeConfig,
+                ...(accountApiKey ? { apiKey: accountApiKey } : { apiKey: '' }),
+                ...(accountModel ? { model: accountModel } : {}),
+              });
+              localConfigExists = true;
+              output.write(`${colors.green('✓')} Key/model pulled from account.\n`);
+            } else if (resolution === 'push') {
+              if (localKey) await updateAccountKey(result.auth.token, localKey, accountSyncOptions);
+              if (localModel) await updateAccountModel(result.auth.token, localModel, accountSyncOptions);
+              output.write(`${colors.green('✓')} Key/model pushed to account.\n`);
+            } else {
+              output.write(`${colors.amber('⚠')} Key/model left unchanged.\n`);
             }
-            output.write(`${colors.green('✓')} API key synchronized from your account${result.config.model ? ` · model ${colors.white(activeConfig.model)}` : ''}. Saved to local config.\n`);
-          } else {
-            activeConfig = normalizeConfig({ ...activeConfig, model: fallbackModel });
-            if (!result.unavailable) {
-              output.write(`${colors.dim('No account API key is available; continuing with the manual/local key.')}\n`);
-            }
+            setSessionApiKey(activeConfig.apiKey || '');
+          }
+
+          const localConfig = localSnapshot;
+          const localBlob = localConfigBlob(activeConfig);
+          const accountBlob = typeof accountConfig?.blob === 'string' ? accountConfig.blob : null;
+          const parsedAccountBlob = parseConfigBlob(accountBlob);
+          let configResolution = null;
+          if (accountBlob !== null && parsedAccountBlob === undefined) {
+            output.write(`${colors.amber('⚠')} Account config is not valid JSON; config was left unchanged.\n`);
+          } else if (!hadLocalConfig && accountBlob !== null) configResolution = 'pull';
+          else if (hadLocalConfig && accountBlob === null) configResolution = 'push';
+          else if (accountBlob !== null && comparableJson(parsedAccountBlob) !== comparableJson(localConfig)) {
+            configResolution = await askSyncResolution(ask, 'config');
+          }
+
+          if (configResolution === 'pull') {
+            const resolvedKey = activeConfig.apiKey;
+            const resolvedModel = activeConfig.model;
+            activeConfig = await saveConfig({
+              ...parsedAccountBlob,
+              apiKey: resolvedKey,
+              model: resolvedModel,
+              systemPrompt: localSnapshot.systemPrompt,
+            });
+            localConfigExists = true;
+            output.write(`${colors.green('✓')} Config pulled from account.\n`);
+          } else if (configResolution === 'push') {
+            await updateAccountConfig(result.auth.token, localBlob, accountSyncOptions);
+            output.write(`${colors.green('✓')} Config pushed to account.\n`);
+          } else if (configResolution === null && accountBlob !== null && parsedAccountBlob !== undefined
+            && comparableJson(parsedAccountBlob) === comparableJson(localConfig)) {
+            output.write(`${colors.dim('✓ Config already synchronized.')}\n`);
+          }
+
+          const localPrompt = activeConfig.systemPrompt;
+          const accountPrompt = accountPromptValue(accountSystemPrompt);
+          let promptResolution = null;
+          if (!localPrompt && accountPrompt) promptResolution = 'pull';
+          else if (localPrompt && !accountPrompt) promptResolution = 'push';
+          else if (localPrompt && accountPrompt && localPrompt !== accountPrompt) {
+            promptResolution = await askSyncResolution(ask, 'system prompt');
+          }
+
+          if (promptResolution === 'pull') {
+            activeConfig = await saveConfig({ ...activeConfig, systemPrompt: accountPrompt });
+            await setSystemPrompt(buildSystemPrompt(activeConfig), memoryBaseDir ? { baseDir: memoryBaseDir } : {});
+            localConfigExists = true;
+            output.write(`${colors.green('✓')} System prompt pulled from account.\n`);
+          } else if (promptResolution === 'push') {
+            await updateAccountSystemPrompt(result.auth.token, localPrompt || '', accountSyncOptions);
+            output.write(`${colors.green('✓')} System prompt pushed to account.\n`);
+          } else if (localPrompt && accountPrompt === localPrompt) {
+            output.write(`${colors.dim('✓ System prompt already synchronized.')}\n`);
           }
           break;
         }
@@ -488,6 +604,23 @@ export function createCli({
           break;
         case 'config': {
           const sub = parts[0]?.toLowerCase();
+          if (sub === 'prompt') {
+            if (parts.length === 1) {
+              output.write(activeConfig.systemPrompt
+                ? `${activeConfig.systemPrompt}\n`
+                : `${colors.dim('No local system prompt configured.')}\n`);
+              break;
+            }
+            const requestedPrompt = parts.slice(1).join(' ');
+            const nextPrompt = requestedPrompt.toLowerCase() === 'clear' && parts.length === 2 ? null : requestedPrompt;
+            activeConfig = await saveConfig({ ...activeConfig, systemPrompt: nextPrompt });
+            localConfigExists = true;
+            await setSystemPrompt(buildSystemPrompt(activeConfig), memoryBaseDir ? { baseDir: memoryBaseDir } : {});
+            output.write(nextPrompt
+              ? `${colors.green('✓')} Local system prompt saved and active for this session.\n`
+              : `${colors.green('✓')} Local system prompt cleared.\n`);
+            break;
+          }
           if (sub === 'search') {
             const action = parts[1]?.toLowerCase();
             if (action !== 'set') {

@@ -31,6 +31,7 @@ const DEFAULT_CONFIG = {
   },
   trustedPaths: [],
   nvidiaDataConsent: null,
+  systemPrompt: null,
 };
 
 function cleanString(value, fallback) {
@@ -61,17 +62,18 @@ export function normalizeModelId(modelId) {
 }
 
 export function normalizeConfig(input = {}) {
-  const preferences = input.preferences ?? {};
+  const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const preferences = source.preferences ?? {};
   const temperature = Number(preferences.temperature);
 
   return {
     ...DEFAULT_CONFIG,
-    ...input,
+    ...source,
     version: 2,
     provider: 'nvidia-nim',
-    baseUrl: cleanString(input.baseUrl, DEFAULT_BASE_URL).replace(/\/+$/, ''),
-    model: normalizeModelId(input.model),
-    apiKey: typeof input.apiKey === 'string' ? input.apiKey.trim() : '',
+    baseUrl: cleanString(source.baseUrl, DEFAULT_BASE_URL).replace(/\/+$/, ''),
+    model: normalizeModelId(source.model),
+    apiKey: typeof source.apiKey === 'string' ? source.apiKey.trim() : '',
     preferences: {
       ...DEFAULT_CONFIG.preferences,
       ...preferences,
@@ -85,11 +87,14 @@ export function normalizeConfig(input = {}) {
       maxTokens: normalizeMaxTokens(preferences.maxTokens),
       searxngUrl: normalizeSearxngUrl(preferences.searxngUrl),
     },
-    nvidiaDataConsent: ['accepted', 'declined'].includes(input.nvidiaDataConsent)
-      ? input.nvidiaDataConsent
+    nvidiaDataConsent: ['accepted', 'declined'].includes(source.nvidiaDataConsent)
+      ? source.nvidiaDataConsent
       : null,
-    trustedPaths: Array.isArray(input.trustedPaths)
-      ? [...new Set(input.trustedPaths.filter((value) => typeof value === 'string').map((value) => path.resolve(value)))]
+    systemPrompt: typeof source.systemPrompt === 'string' && source.systemPrompt.trim()
+      ? source.systemPrompt
+      : null,
+    trustedPaths: Array.isArray(source.trustedPaths)
+      ? [...new Set(source.trustedPaths.filter((value) => typeof value === 'string').map((value) => path.resolve(value)))]
       : [],
   };
 }

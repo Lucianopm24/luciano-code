@@ -98,6 +98,7 @@ export async function main() {
 
     createCli({
       config: activeConfig,
+      configExists: exists,
       manualModel,
       output,
       readlineInterface: startupReadline,

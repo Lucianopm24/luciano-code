@@ -194,6 +194,15 @@ export async function appendConversationMessage(message, { baseDir = MEMORY_DIR 
   return saveCurrentConversation(conversation, { baseDir });
 }
 
+export async function setSystemPrompt(content, { baseDir = MEMORY_DIR } = {}) {
+  const conversation = await loadCurrentConversation({ baseDir });
+  const systemMessage = sanitizeMessage({ role: 'system', content: String(content ?? '') });
+  const systemIndex = conversation.messages.findIndex((message) => message.role === 'system');
+  if (systemIndex >= 0) conversation.messages[systemIndex] = systemMessage;
+  else conversation.messages.unshift(systemMessage);
+  return saveCurrentConversation(conversation, { baseDir });
+}
+
 export async function appendCommandExecution(result, { baseDir = MEMORY_DIR } = {}) {
   if (!result || typeof result.command !== 'string') return;
   await ensureDirectories(baseDir);

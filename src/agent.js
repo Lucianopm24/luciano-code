@@ -13,6 +13,7 @@ import {
   appendConversationMessage,
   loadCurrentConversation,
   selectContextMessages,
+  setSystemPrompt,
 } from './memory.js';
 import {
   createToolAuthorizer,
@@ -25,6 +26,22 @@ import {
 
 const MAX_TOOL_TURNS = 12;
 const MAX_AUTOMATIC_529_RETRIES = 10;
+
+export function buildSystemPrompt(config) {
+  const normalized = config;
+  const baseSystemContent = [
+    `You are Luciano Code AI, a concise coding assistant. Respond in ${normalized.preferences.language === 'en' ? 'English' : 'Spanish'} unless the user asks otherwise.`,
+    'Always format the final response as Markdown. Use headings, bullets, fenced code blocks, tables, and inline code when they improve clarity.',
+    'Do not use raw ANSI escape sequences or HTML. Do not claim to have modified files unless a tool result confirms it.',
+    normalized.preferences.noThink
+      ? 'Do not spend effort on hidden reasoning. Give a direct, concise answer and proceed with tools when needed.'
+      : 'Only expose reasoning/progress that the provider explicitly returns as reasoning_content or reasoning; never invent private chain-of-thought.',
+    toolInstructions(normalized),
+  ].join('\n\n');
+  return normalized.systemPrompt?.trim()
+    ? `${baseSystemContent}\n\n---\nEl usuario te ha dado unas instrucciones personalizadas, que son:\n${normalized.systemPrompt}`
+    : baseSystemContent;
+}
 
 function renderRateLimitProtection(stream, error) {
   const duration = Math.max(1, Number(error?.retryAfterSeconds) || 70);
@@ -172,20 +189,9 @@ export async function runPrompt(
 
   let activeConfig = config;
   let client = new NvidiaNimClient(activeConfig);
-  const systemContent = [
-    `You are Luciano Code AI, a concise coding assistant. Respond in ${config.preferences.language === 'en' ? 'English' : 'Spanish'} unless the user asks otherwise.`,
-    'Always format the final response as Markdown. Use headings, bullets, fenced code blocks, tables, and inline code when they improve clarity.',
-    'Do not use raw ANSI escape sequences or HTML. Do not claim to have modified files unless a tool result confirms it.',
-    config.preferences.noThink
-      ? 'Do not spend effort on hidden reasoning. Give a direct, concise answer and proceed with tools when needed.'
-      : 'Only expose reasoning/progress that the provider explicitly returns as reasoning_content or reasoning; never invent private chain-of-thought.',
-    toolInstructions(activeConfig),
-  ].join('\n\n');
+  const systemContent = buildSystemPrompt(config);
   const memoryOptions = memoryBaseDir ? { baseDir: memoryBaseDir } : {};
-  const conversation = await loadCurrentConversation(memoryOptions);
-  if (!conversation.messages.some((message) => message.role === 'system')) {
-    await appendConversationMessage({ role: 'system', content: systemContent }, memoryOptions);
-  }
+  await setSystemPrompt(systemContent, memoryOptions);
   await appendConversationMessage({ role: 'user', content: prompt }, memoryOptions);
   const storedConversation = await loadCurrentConversation(memoryOptions);
   const cloudMessages = Array.isArray(cloudLlmMessages)

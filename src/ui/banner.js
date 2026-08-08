@@ -85,6 +85,7 @@ export function renderHelp() {
     `${colors.green('/nothink')}   Toggle model reasoning on or off`,
     `${colors.green('/tokens')}    Show or set max output tokens`,
     `${colors.green('/config')}    Show current configuration`,
+    `${colors.green('/config prompt')} Show or set the local system prompt`,
     `${colors.green('/config search set')} <url>  Set the SearXNG web search endpoint`,
     `${colors.green('/trust')}     Show folder trust status`,
     `${colors.green('/trust reset')} Revoke trust for this folder`,
@@ -134,6 +135,7 @@ export function renderConfig(config = normalizeConfig()) {
     `${colors.dim('Max tokens')} ${colors.white(config.preferences.maxTokens)}`,
     `${colors.dim('Search')}    ${colors.slate(config.preferences.searxngUrl)}`,
     `${colors.dim('Consent')}   ${colors.white(config.nvidiaDataConsent || 'not decided')}`,
+    `${colors.dim('Prompt')}    ${colors.white(config.systemPrompt ? 'configured locally' : 'not configured')}`,
     '',
     colors.dim('Stored locally with restricted permissions.'),
   ], { title: 'Configuration', width: 62, tone: 'green' });

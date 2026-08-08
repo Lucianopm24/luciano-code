@@ -29,7 +29,7 @@ async function responseJson(response, description) {
   } catch {
     throw new Error(`${description} returned invalid JSON.`);
   }
-  if (!response.ok) {
+  if (!response.ok || payload?.ok === false) {
     const detail = payload?.error || payload?.message || `HTTP ${response.status}`;
     const error = new Error(`${description} failed: ${detail}`);
     error.status = response.status;
@@ -135,15 +135,96 @@ export async function requestLoginStatus(code, {
   return responseJson(response, 'Login status request');
 }
 
-export async function requestAccountKey(token, {
+function cliHeaders(token, hasBody = false) {
+  return {
+    Authorization: `Bearer ${token}`,
+    ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+  };
+}
+
+async function cliRequest(pathname, token, {
+  method = 'GET',
+  body,
+  fetchImpl = globalThis.fetch,
+  siteUrl = getConvexSiteUrl(),
+  description = `Account ${method} ${pathname}`,
+} = {}) {
+  const response = await fetchImpl(backendUrl(pathname, siteUrl), {
+    method,
+    headers: cliHeaders(token, body !== undefined),
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  return responseJson(response, description);
+}
+
+export async function requestAccountKey(token, options = {}) {
+  return cliRequest('/cli/key', token, {
+    ...options,
+    method: 'POST',
+    description: 'Account key request',
+  });
+}
+
+export async function updateAccountKey(token, apiKey, options = {}) {
+  return cliRequest('/cli/key', token, {
+    ...options,
+    method: 'POST',
+    body: { apiKey },
+    description: 'Account key update',
+  });
+}
+
+export async function requestAccountConfig(token, options = {}) {
+  return cliRequest('/cli/config', token, {
+    ...options,
+    method: 'GET',
+    description: 'Account config request',
+  });
+}
+
+export async function updateAccountConfig(token, blob, options = {}) {
+  return cliRequest('/cli/config', token, {
+    ...options,
+    method: 'POST',
+    body: { blob },
+    description: 'Account config update',
+  });
+}
+
+export async function updateAccountModel(token, model, options = {}) {
+  return cliRequest('/cli/model', token, {
+    ...options,
+    method: 'POST',
+    body: { model },
+    description: 'Account model update',
+  });
+}
+
+export async function requestAccountSystemPrompt(token, options = {}) {
+  return cliRequest('/cli/systemprompt', token, {
+    ...options,
+    method: 'GET',
+    description: 'Account system prompt request',
+  });
+}
+
+export async function updateAccountSystemPrompt(token, prompt, options = {}) {
+  return cliRequest('/cli/systemprompt', token, {
+    ...options,
+    method: 'POST',
+    body: { prompt },
+    description: 'Account system prompt update',
+  });
+}
+
+export async function fetchAccountSettings(token, {
   fetchImpl = globalThis.fetch,
   siteUrl = getConvexSiteUrl(),
 } = {}) {
-  const response = await fetchImpl(backendUrl('/cli/key', siteUrl), {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  return responseJson(response, 'Account key request');
+  const key = await requestAccountKey(token, { fetchImpl, siteUrl });
+  const config = await requestAccountConfig(token, { fetchImpl, siteUrl });
+  const systemPrompt = await requestAccountSystemPrompt(token, { fetchImpl, siteUrl });
+  return { key, config, systemPrompt };
 }
 
 export function accountIdentity(account) {
@@ -194,6 +275,43 @@ export async function syncAccountSession({
     }
     output.write(`⚠ Could not sync your account session: ${error.message}\n`);
     return { authenticated: true, active: false, unavailable: true, config: null, auth };
+  }
+}
+
+export async function syncAccountSettings({
+  output = process.stdout,
+  fetchImpl = globalThis.fetch,
+  siteUrl = getConvexSiteUrl(),
+  authPath = AUTH_PATH,
+} = {}) {
+  clearSessionApiKey();
+  const auth = await loadAuth({ authPath });
+  if (!auth) return { authenticated: false, active: false, settings: null, auth: null };
+
+  try {
+    const settings = await fetchAccountSettings(auth.token, { fetchImpl, siteUrl });
+    const account = settings.key.account || auth.account || null;
+    const updatedAuth = { ...auth, ...(account ? { account } : {}) };
+    if (account && JSON.stringify(account) !== JSON.stringify(auth.account)) {
+      await saveAuth(updatedAuth, { authPath });
+    }
+    const apiKey = typeof settings.key.apiKey === 'string' ? settings.key.apiKey.trim() : '';
+    if (apiKey) setSessionApiKey(apiKey);
+    return {
+      authenticated: true,
+      active: Boolean(apiKey),
+      settings,
+      auth: updatedAuth,
+    };
+  } catch (error) {
+    if (error.status === 401) {
+      await clearAuth({ authPath });
+      clearSessionApiKey();
+      output.write('Session expired, run /login again.\n');
+      return { authenticated: false, active: false, expired: true, settings: null, auth: null };
+    }
+    output.write(`⚠ Could not sync your account settings: ${error.message}\n`);
+    return { authenticated: true, active: false, unavailable: true, settings: null, auth };
   }
 }
 
