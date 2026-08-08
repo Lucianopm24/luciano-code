@@ -28,7 +28,7 @@ import {
   syncAccountSession,
 } from './auth.js';
 
-const PROMPT = `${colors.green('luciano-code')} ${colors.dim('>')} `;
+const PROMPT = `${colors.green('You')} ${colors.dim('>')} `;
 const ACCEPTED = new Set(['y', 'yes', 's', 'si', 'sí']);
 
 export function parseCommandInput(rawInput) {
@@ -65,10 +65,10 @@ function renderCloudHistory(thread, stream) {
   }
   stream.write(`\n${colors.bold('Cloud session history')}\n`);
   for (const message of messages) {
-    const role = message?.role === 'user' ? 'You' : message?.role === 'assistant' ? 'Assistant' : message?.role || 'Message';
+    const role = message?.role === 'user' ? 'You' : message?.role === 'assistant' ? 'Coder' : message?.role || 'Message';
     const content = cloudMessageContent(message);
     if (!content) continue;
-    const rendered = role === 'Assistant' ? renderMarkdown(content) : content;
+    const rendered = role === 'Coder' ? renderMarkdown(content) : content;
     stream.write(`\n${colors.brightGreen(role)} ${colors.dim('›')}\n${rendered}\n`);
   }
   stream.write('\n');

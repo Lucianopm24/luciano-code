@@ -83,6 +83,7 @@ export async function main() {
       });
     }
 
+    for (let i = 0; i < 50; i++) output.write('\n');
     output.write(`${renderBanner(activeConfig, output.columns)}\n`);
 
     if (args.has('--demo')) {

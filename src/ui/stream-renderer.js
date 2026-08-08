@@ -2,7 +2,7 @@ import { colors, stripAnsi } from './colors.js';
 import { renderMarkdownLine } from './markdown.js';
 import { createTerminalRenderer } from './terminal-renderer.js';
 
-const RESPONSE_PREFIX = `${colors.brightGreen('Assistant')} ${colors.dim('›')} `;
+const RESPONSE_PREFIX = `${colors.brightGreen('Coder')} ${colors.dim('›')} `;
 const CONTINUATION_PREFIX = ' '.repeat(stripAnsi(RESPONSE_PREFIX).length);
 
 export function supportsInPlaceUpdates(stream, {

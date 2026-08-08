@@ -3,9 +3,22 @@ import { colors, symbols, stripAnsi, visibleLength } from './colors.js';
 import { statusLine } from './status.js';
 import { getApiKey, isConfigured, maskApiKey, normalizeConfig, runtimeConfig } from '../config.js';
 
-const LARGE_BANNER_MIN_WIDTH = 60;
-const COMPACT_BANNER_MIN_WIDTH = 36;
+const CODER_MIN_WIDTH = 20;
 const DEFAULT_TERMINAL_WIDTH = 80;
+
+const CODER_ASCII = [
+  '    ████████████',
+  '    ██        ██',
+  '    ██  ██  ██ ██',
+  '    ██  ██  ██ ██',
+  '    ██        ██',
+  '    ██  ██████ ██',
+  '    ██        ██',
+  '    ████████████',
+  '        ██  ██',
+  '        ██  ██',
+  '        ██  ██',
+];
 
 export function getTerminalWidth(stream = process.stdout) {
   const streamWidth = Number(stream?.columns);
@@ -40,71 +53,18 @@ function compactStatus(label, state, width) {
   return `${colors[state === 'warning' ? 'amber' : 'green'](prefix)}${colors.white(truncate(label, Math.max(1, width - prefix.length)))}`;
 }
 
-function renderLargeBanner(config, width) {
-  const title = colors.brightGreen(colors.bold('LUCIANO CODE AI'));
-  const subtitle = colors.slate('Your AI coding partner');
-  const mark = colors.green('◆');
-  const banner = box([
-    '',
-    `          ${title}`,
-    `          ${subtitle}`,
-    '',
-  ], { width: 44, tone: 'green' });
-  const configured = isConfigured(config);
-  const providerLabel = configured ? `NVIDIA NIM ready · ${config.model}` : 'NVIDIA NIM needs configuration';
-
-  return [
-    '',
-    `${mark} ${colors.dim('LUCIANO CODE AI')} ${colors.dim('· terminal workspace')}`,
-    banner,
-    '',
-    statusLine('Connected', 'success'),
-    statusLine('Project loaded', 'success'),
-    statusLine(truncate(providerLabel, Math.max(1, width - 2)), configured ? 'success' : 'warning'),
-    '',
-  ].join('\n');
-}
-
-function renderCompactBanner(config, width) {
-  const configured = isConfigured(config);
-  const innerWidth = Math.max(COMPACT_BANNER_MIN_WIDTH - 4, width - 4);
-  const modelLabel = configured ? `NIM ready · ${config.model}` : 'NIM setup required';
-  const compactBox = box([
-    centered(colors.brightGreen(colors.bold('LUCIANO CODE AI')), innerWidth),
-    centered(colors.slate('AI coding assistant'), innerWidth),
-  ], { width: innerWidth, tone: 'green' });
-
-  return [
-    '',
-    `${colors.green('◆')} ${colors.bold('LUCIANO CODE AI')}`,
-    compactBox,
-    compactStatus('Connected', 'success', width),
-    compactStatus('Project loaded', 'success', width),
-    compactStatus(modelLabel, configured ? 'success' : 'warning', width),
-    '',
-  ].join('\n');
-}
-
-function renderTinyBanner(config, width) {
-  const configured = isConfigured(config);
-  const modelLabel = configured ? `NIM: ${config.model}` : 'NIM: setup required';
-  const maxLineWidth = Math.max(1, width);
-
-  return [
-    '',
-    truncate(`${colors.green('◆')} ${colors.bold('LUCIANO CODE AI')}`, maxLineWidth),
-    truncate(colors.slate('AI coding assistant'), maxLineWidth),
-    compactStatus(configured ? 'Connected' : 'NIM setup required', configured ? 'success' : 'warning', maxLineWidth),
-    truncate(colors.dim(modelLabel), maxLineWidth),
-    '',
-  ].join('\n');
+function renderCoder(width) {
+  const coderWidth = CODER_ASCII.reduce((max, line) => Math.max(max, visibleLength(line)), 0);
+  if (width < coderWidth) return '';
+  const left = Math.max(0, Math.floor((width - coderWidth) / 2));
+  const indent = ' '.repeat(left);
+  return CODER_ASCII.map((line) => `${indent}${colors.green(line)}`).join('\n');
 }
 
 export function renderBanner(config = normalizeConfig(), columns = getTerminalWidth()) {
   const width = Number.isFinite(Number(columns)) ? Math.floor(Number(columns)) : getTerminalWidth();
-  if (width < COMPACT_BANNER_MIN_WIDTH) return renderTinyBanner(config, Math.max(1, width));
-  if (width < LARGE_BANNER_MIN_WIDTH) return renderCompactBanner(config, width);
-  return renderLargeBanner(config, width);
+  if (width < CODER_MIN_WIDTH) return '';
+  return renderCoder(width);
 }
 
 export function renderHelp() {
