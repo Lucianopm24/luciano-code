@@ -2,6 +2,7 @@ import readline from 'node:readline';
 import { runDemo } from './demo.js';
 import { buildSystemPrompt, runPrompt, runWorkspaceAnalysis } from './agent.js';
 import { CloudClient, CLOUD_SESSION_EXPIRED_MESSAGE, CLOUD_THREAD_NOT_FOUND_MESSAGE, findCloudRepo, formatCloudUpdatedAt, validateCloudRepo } from './cloud.js';
+import { collectSkillBatch, collectSkillFiles, readPromptFile, RegistryClient, REGISTRY_SESSION_EXPIRED_MESSAGE, registryItemSummary } from './registry.js';
 import { hasNvidiaDataConsent, loadConfig, normalizeConfig, normalizeMaxTokens, saveConfig, setNvidiaDataConsent, MAX_TOKENS_MIN, MAX_TOKENS_MAX } from './config.js';
 import { renderConsentStatus } from './consent.js';
 import {
@@ -113,6 +114,97 @@ function cloudThreadLabel(thread, index) {
   return `${index + 1}. ${thread.title} · ${thread.status} · ${formatCloudUpdatedAt(thread.updatedAt)} · ID: ${thread.threadId}`;
 }
 
+function registryFlags(parts) {
+  const positional = [];
+  const options = { tags: [] };
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (part === '--mine') options.mine = true;
+    else if (part === '--public') options.visibility = 'public';
+    else if (part === '--private') options.visibility = 'private';
+    else if (part === '--tag') {
+      if (parts[index + 1]) options.tags.push(parts[++index]);
+    } else if (part.startsWith('--tag=')) options.tags.push(part.slice(6));
+    else if (part === '--description') options.description = parts[++index] || '';
+    else if (part.startsWith('--description=')) options.description = part.slice(14);
+    else if (part === '--owner') options.owner = parts[++index] || '';
+    else if (part.startsWith('--owner=')) options.owner = part.slice(8);
+    else if (part === '--name') options.displayName = parts[++index] || '';
+    else if (part.startsWith('--name=')) options.displayName = part.slice(7);
+    else if (part === '--definition') options.definition = parts[++index] || '';
+    else if (part.startsWith('--definition=')) options.definition = part.slice(13);
+    else if (part === '--entry') options.entry = parts[++index] || '';
+    else if (part.startsWith('--entry=')) options.entry = part.slice(8);
+    else if (part === '--permissions') options.permissions = (parts[++index] || '').split(',');
+    else if (part.startsWith('--permissions=')) options.permissions = part.slice(14).split(',');
+    else positional.push(part);
+  }
+  return { positional, options };
+}
+
+function registryUsage(kind) {
+  const noun = kind === 'prompts' ? 'prompt' : 'skill';
+  const source = kind === 'prompts' ? '<file>' : '<file-or-folder>';
+  return [
+    `Usage: /${kind} search [query] [--tag <tag>]`,
+    `       /${kind} list [--mine] [--public|--private]`,
+    `       /${kind} get <slug>`,
+    `       /${kind} publish <slug> ${source} [--public] [--tag <tag>]`,
+    kind === 'skills' ? '       Skill options: [--name <display-name>] [--entry <file>] [--permissions <list>] [--definition <json-file>]' : '',
+    `       /${kind} delete <slug>`,
+    kind === 'skills' ? '       /skills batch <folder> --owner <handle> [--public]' : '',
+    '',
+    `Publishes a ${noun} to your account. Public items become discoverable after backend processing.`,
+  ].join('\n');
+}
+
+function renderRegistryItems(items, kind, output) {
+  if (!Array.isArray(items) || !items.length) {
+    output.write(`${colors.dim(`No ${kind} found.`)}\n`);
+    return;
+  }
+  output.write(`
+${colors.bold(kind === 'prompts' ? 'Prompt Registry' : 'Skills Marketplace')}
+`);
+  items.forEach((item, index) => {
+    const summary = registryItemSummary(item);
+    const tags = summary.tags.length ? ` · ${summary.tags.join(', ')}` : '';
+    const meta = [summary.visibility, summary.status, `downloads: ${summary.downloads}`].filter(Boolean).join(' · ');
+    output.write(`${colors.green(`${index + 1}.`)} ${colors.white(summary.slug)}${summary.displayName ? ` · ${summary.displayName}` : ''}
+`);
+    if (summary.description) output.write(`   ${summary.description}
+`);
+    output.write(`   ${colors.dim(`${meta}${tags}`)}
+`);
+  });
+}
+
+function renderRegistryDetail(payload, kind, output) {
+  const item = payload?.prompt || payload?.skill || payload;
+  const summary = registryItemSummary(item);
+  output.write(`
+${colors.bold(summary.slug || `${kind} detail`)}
+`);
+  if (summary.displayName) output.write(`${summary.displayName}
+`);
+  if (summary.description) output.write(`${summary.description}
+`);
+  output.write(`${colors.dim([summary.visibility, summary.status, `version: ${summary.version ?? '?'}`, `downloads: ${summary.downloads}`].filter(Boolean).join(' · '))}
+`);
+  if (kind === 'prompts') {
+    output.write(`
+${item.content || colors.dim('(empty prompt)')}
+`);
+  } else {
+    const files = Array.isArray(item.files) ? item.files : [];
+    output.write(`
+${colors.bold(`Files (${files.length})`)}
+`);
+    for (const file of files) output.write(`${colors.green('·')} ${file.path}
+`);
+  }
+}
+
 export async function chooseCloudThread(threads, ask, output) {
   if (threads.length === 1) return threads[0];
   output.write(`\n${colors.bold('Choose a Cloud session')}\n`);
@@ -136,6 +228,8 @@ export function createCli({
   accountSyncOptions = {},
   readlineInterface: existingInterface,
   cloudClient: injectedCloudClient,
+  registryClient: injectedRegistryClient,
+  registryOptions = {},
 } = {}) {
   output = createTerminalRenderer(output);
   let readlineInterface;
@@ -145,6 +239,7 @@ export function createCli({
   const fallbackModel = manualModel || activeConfig.model;
   let restarting = false;
   const cloudClient = injectedCloudClient || new CloudClient();
+  const registryClient = injectedRegistryClient || new RegistryClient(registryOptions);
   let activeCloudSession = null;
 
   const handleCloudError = async (error, { threadRequest = false } = {}) => {
@@ -159,6 +254,141 @@ export function createCli({
       return;
     }
     output.write(`${colors.red('✗')} ${colors.slate(error.message)}\n`);
+  };
+
+  const handleRegistryError = async (error) => {
+    if (error?.status === 401 || error?.sessionExpired || error?.message === REGISTRY_SESSION_EXPIRED_MESSAGE) {
+      output.write(`${colors.amber('⚠')} ${REGISTRY_SESSION_EXPIRED_MESSAGE}.\n`);
+      return;
+    }
+    output.write(`${colors.red('✗')} ${colors.slate(error.message)}\n`);
+  };
+
+  const handleRegistryCommand = async (kind, parts) => {
+    const { positional, options } = registryFlags(parts);
+    const action = positional.shift()?.toLowerCase();
+    const client = registryClient;
+    const searchTag = options.tags[0];
+    if (!action) {
+      output.write(`${registryUsage(kind)}\n`);
+      return;
+    }
+    if (action === 'search') {
+      const query = positional.join(' ').trim();
+      const result = kind === 'prompts'
+        ? await client.searchPrompts({ q: query || undefined, tag: searchTag })
+        : await client.searchSkills({ q: query || undefined, tag: searchTag });
+      renderRegistryItems(result?.[kind] || result?.items || [], kind, output);
+      return;
+    }
+    if (action === 'list') {
+      const result = kind === 'prompts'
+        ? await client.listPrompts({ mine: options.mine, visibility: options.visibility, search: positional.join(' ').trim() || undefined, tag: searchTag })
+        : await client.listSkills({ mine: options.mine, visibility: options.visibility, search: positional.join(' ').trim() || undefined });
+      renderRegistryItems(result?.[kind] || result?.items || [], kind, output);
+      return;
+    }
+    if (action === 'get') {
+      if (positional.length !== 1) {
+        output.write(`${colors.dim('Usage:')} /${kind} get <slug>\n`);
+        return;
+      }
+      const result = kind === 'prompts' ? await client.getPrompt(positional[0]) : await client.getSkill(positional[0]);
+      renderRegistryDetail(result, kind, output);
+      return;
+    }
+    if (action === 'delete') {
+      if (positional.length !== 1) {
+        output.write(`${colors.dim('Usage:')} /${kind} delete <slug>\n`);
+        return;
+      }
+      if (!input.isTTY || !output.isTTY) {
+        output.write(`${colors.amber('⚠')} Deleting a registry item requires confirmation in an interactive terminal.\n`);
+        return;
+      }
+      const confirmation = (await ask(`${colors.amber(`Delete ${positional[0]}?`)} ${colors.dim('[y/N]')} `)).trim().toLowerCase();
+      if (!ACCEPTED.has(confirmation)) {
+        output.write(`${colors.dim('Registry item kept.')}\n`);
+        return;
+      }
+      const result = kind === 'prompts' ? await client.deletePrompt(positional[0]) : await client.deleteSkill(positional[0]);
+      output.write(`${colors.green('✓')} ${result.slug || positional[0]} deleted.\n`);
+      return;
+    }
+    if (action === 'batch' && kind === 'skills') {
+      if (positional.length !== 1 || !options.owner) {
+        output.write(`${colors.dim('Usage:')} /skills batch <folder> --owner <handle> [--public]\n`);
+        return;
+      }
+      const skills = await collectSkillBatch(positional[0], { owner: options.owner });
+      const result = await client.publishSkillsBatch({
+        visibility: options.visibility || 'private',
+        skills,
+      });
+      const published = Array.isArray(result.skills) ? result.skills : skills;
+      output.write(`${colors.green('✓')} Published ${published.length} skills as a batch.\n`);
+      return;
+    }
+    if (action === 'publish') {
+      if (positional.length !== 2) {
+        output.write(`${colors.dim('Usage:')} /${kind} publish <slug> ${kind === 'prompts' ? '<file>' : '<file-or-folder>'} [--public]\n`);
+        return;
+      }
+      const [slug, source] = positional;
+      if (kind === 'prompts') {
+        const content = await readPromptFile(source);
+        const result = await client.publishPrompt({
+          slug,
+          content,
+          description: options.description || '',
+          visibility: options.visibility || 'private',
+          tags: options.tags,
+        });
+        output.write(`${colors.green('✓')} ${result.slug || slug} published (v${result.version ?? '?'}, ${result.status || 'saved'}).\n`);
+      } else {
+        const files = await collectSkillFiles(source);
+        let definition;
+        if (options.definition) {
+          try {
+            definition = JSON.parse(await readPromptFile(options.definition));
+          } catch (error) {
+            throw new Error(`Invalid skill definition JSON: ${error.message}`);
+          }
+        } else {
+          const manifest = files.find((file) => file.path === 'skill.json');
+          if (manifest) {
+            try {
+              const parsedManifest = JSON.parse(manifest.content);
+              definition = {
+                description: parsedManifest.description || options.description || '',
+                parameters: parsedManifest.parameters || { type: 'object', properties: {} },
+              };
+            } catch (error) {
+              throw new Error(`Invalid skill.json: ${error.message}`);
+            }
+          } else {
+            throw new Error('Single-file skills require --definition <json-file> or a skill.json manifest.');
+          }
+        }
+        const result = await client.publishSkill({
+          slug,
+          displayName: options.displayName,
+          files,
+          entry: options.entry,
+          definition,
+          permissions: options.permissions || [],
+          description: options.description || '',
+          visibility: options.visibility || 'private',
+          tags: options.tags,
+        });
+        output.write(`${colors.green('✓')} ${result.slug || slug} published (v${result.version ?? '?'}, ${result.status || 'saved'}).\n`);
+        if (Array.isArray(result.warnings) && result.warnings.length) {
+          output.write(`${colors.amber('⚠')} Warnings: ${result.warnings.join('; ')}\n`);
+        }
+      }
+      return;
+    }
+    output.write(`${registryUsage(kind)}\n`);
   };
 
   const loadCloudSession = async (repo, requestedThreadId, hybrid) => {
@@ -371,6 +601,14 @@ export function createCli({
           }
           break;
         }
+        case 'prompts':
+        case 'skills':
+          try {
+            await handleRegistryCommand(command, parts);
+          } catch (error) {
+            await handleRegistryError(error);
+          }
+          break;
         case 'cloud': {
           const action = parts[0]?.toLowerCase();
           if (action === 'repos') {

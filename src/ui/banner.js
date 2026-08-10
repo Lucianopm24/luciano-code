@@ -77,6 +77,8 @@ export function renderHelp() {
     `${colors.green('/key set')}  Replace the NVIDIA API key`,
     `${colors.green('/model set')} Choose or change the active NIM model`,
     `${colors.green('/models')}    List available NVIDIA NIM models`,
+    `${colors.green('/prompts')}   Search, publish, view, or delete prompts`,
+    `${colors.green('/skills')}    Search, publish, view, or delete skills`,
     `${colors.green('/cloud repos')}    List connected Cloud repositories`,
     `${colors.green('/cloud threads')} <repo>  List Cloud sessions for a repository`,
     `${colors.green('/cloud continue')} <repo>  Continue a Cloud session locally`,
